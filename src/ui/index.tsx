@@ -395,16 +395,25 @@ function mergeSnapshotWithApprovals(
 ): AttentionSnapshot {
   const base = snapshot ?? createEmptySnapshot(companyId);
   const approvalFrames = actionableApprovalRecords(approvals).map(approvalRecordToFrame);
-  if (approvalFrames.length === 0) return base;
-
-  const approvalIds = new Set(approvalFrames.map((frame) => approvalIdForFrame(frame)).filter((value): value is string => !!value));
-  const isNonPendingWorkerApproval = (frame: StoredAttentionFrame) => {
-    const approvalId = approvalIdForFrame(frame);
-    return approvalId ? !approvalIds.has(approvalId) : false;
-  };
   const baseNonApprovalActive = base.active && !approvalIdForFrame(base.active) ? base.active : null;
   const baseNonApprovalQueued = base.queued.filter((frame) => !approvalIdForFrame(frame));
-  const baseAmbient = base.ambient.filter((frame) => !isNonPendingWorkerApproval(frame));
+  const baseAmbient = base.ambient.filter((frame) => !approvalIdForFrame(frame));
+
+  if (approvalFrames.length === 0) {
+    return {
+      ...base,
+      active: baseNonApprovalActive,
+      queued: baseNonApprovalQueued,
+      ambient: baseAmbient,
+      counts: {
+        active: baseNonApprovalActive ? 1 : 0,
+        queued: baseNonApprovalQueued.length,
+        ambient: baseAmbient.length,
+        total: (baseNonApprovalActive ? 1 : 0) + baseNonApprovalQueued.length + baseAmbient.length,
+      },
+    };
+  }
+
   const candidates: Array<{ frame: StoredAttentionFrame; lane: FrameLane }> = [
     ...(baseNonApprovalActive ? [{ frame: baseNonApprovalActive, lane: "active" as const }] : []),
     ...baseNonApprovalQueued.map((frame) => ({ frame, lane: "queued" as const })),

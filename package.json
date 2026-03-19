@@ -22,6 +22,7 @@
     "build:rollup": "pnpm exec rollup --config ./rollup.config.ts --configPlugin @rollup/plugin-typescript",
     "dev": "tsx ./esbuild.config.ts --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
+    "demo:record": "tsx ./scripts/demo/capture.ts",
     "prepack": "pnpm build",
     "test": "vitest run --config ./vitest.config.ts",
     "typecheck": "tsc --noEmit"
@@ -56,9 +57,10 @@
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "esbuild": "^0.27.3",
+    "playwright": "^1.58.2",
     "rollup": "^4.38.0",
-    "tsx": "^4.20.5",
     "tslib": "^2.8.1",
+    "tsx": "^4.20.5",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
   },
