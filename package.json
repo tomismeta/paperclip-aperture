@@ -24,6 +24,7 @@
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
     "demo:record": "tsx ./scripts/demo/capture.ts",
     "prepack": "pnpm build",
+    "release:check": "pnpm typecheck && pnpm test && pnpm build && npm publish --dry-run",
     "test": "vitest run --config ./vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },

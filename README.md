@@ -75,6 +75,12 @@ Once this plugin is published to npm, the install shape becomes:
 pnpm paperclipai plugin install @tomismeta/paperclip-aperture
 ```
 
+Before publishing, run:
+
+```bash
+pnpm release:check
+```
+
 ## What This Plugin Is
 
 Paperclip Aperture is an alternative operator attention surface for Paperclip.
