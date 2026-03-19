@@ -18,14 +18,14 @@ Paperclip Aperture adds a Focus surface to Paperclip that deterministically rank
 ## Install
 
 ```bash
-paperclipai plugin install @tomismeta/paperclip-aperture
+npx paperclipai plugin install @tomismeta/paperclip-aperture
 ```
 
 If you need Paperclip first:
 
 ```bash
 npx paperclipai onboard --yes
-paperclipai run
+npx paperclipai run
 ```
 
 Then install the plugin with the command above.

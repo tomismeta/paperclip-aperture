@@ -5,9 +5,9 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.1.2",
   displayName: "Paperclip Aperture",
-  description: "An Aperture-powered attention center for Paperclip operators.",
-  author: "Tom Is Meta",
-  categories: ["connector", "automation", "ui"],
+  description: "A Paperclip plugin powered by Aperture's deterministic attention and judgment engine.",
+  author: "@tomismeta",
+  categories: ["automation", "ui"],
   capabilities: [
     "events.subscribe",
     "issues.read",
