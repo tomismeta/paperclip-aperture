@@ -49,4 +49,27 @@ describe("paperclip aperture", () => {
     expect(snapshot.active?.consequence).toBe("high");
     expect(snapshot.active?.title).toContain("Build failed");
   });
+
+  it("preserves budget override semantics for approval frames", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "budget_override_required",
+        title: "Approve temporary budget override for CAM-9",
+        summary: "Budget controls are blocking follow-up work on CAM-9.",
+        requestedAmount: "$500",
+        reason: "Additional investigation work exceeded the planned budget.",
+      },
+      { companyId: "company-3", entityId: "approval-budget-1", entityType: "approval" },
+    );
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-3" });
+    expect(snapshot.active?.title).toBe("Approve temporary budget override for CAM-9");
+    expect(snapshot.active?.consequence).toBe("high");
+    expect(snapshot.active?.provenance?.factors).toContain("budget stop");
+    expect(snapshot.active?.context?.items?.find((item) => item.id === "requested-amount")?.value).toBe("$500");
+  });
 });

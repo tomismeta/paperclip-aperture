@@ -122,6 +122,14 @@ function approvalTitle(event: PluginEvent): string {
   return approvalType ? `${approvalType} approval` : "Approval requested";
 }
 
+function approvalType(event: PluginEvent): string | undefined {
+  return readPayloadString(event.payload, "type");
+}
+
+function isBudgetOverrideApproval(event: PluginEvent): boolean {
+  return approvalType(event) === "budget_override_required";
+}
+
 function issueDisplayTitle(event: PluginEvent, fallback: string): string {
   const identifier = readPayloadString(event.payload, "identifier");
   const issueTitle = readPayloadString(event.payload, "issueTitle") ?? readPayloadString(event.payload, "title");
@@ -139,6 +147,13 @@ export function mapPluginEventToAperture(event: PluginEvent): ApertureEvent | nu
 
   switch (eventType) {
     case "approval.created":
+      {
+        const type = approvalType(event);
+        const budgetOverride = isBudgetOverrideApproval(event);
+        const requestedAmount = readPayloadString(event.payload, "requestedAmount");
+        const reason = readPayloadString(event.payload, "reason");
+        const decisionContext = readPayloadString(event.payload, "decisionContext");
+
       return {
         id: `${event.eventId}:approval`,
         type: "human.input.requested",
@@ -151,17 +166,40 @@ export function mapPluginEventToAperture(event: PluginEvent): ApertureEvent | nu
         title: approvalTitle(event),
         summary:
           readPayloadString(event.payload, "summary")
-          ?? "A board decision is blocking work in Paperclip.",
-        consequence: "medium",
+          ?? (budgetOverride
+            ? "Budget controls are blocking work until a board decision lands."
+            : "A board decision is blocking work in Paperclip."),
+        consequence: budgetOverride ? "high" : "medium",
         tone: "focused",
         request: { kind: "approval" },
         context: {
           items: [
-            ...(humanizeApprovalType(readPayloadString(event.payload, "type"))
+            ...(humanizeApprovalType(type)
               ? [{
                   id: "approval-type",
                   label: "Type",
-                  value: humanizeApprovalType(readPayloadString(event.payload, "type")),
+                  value: humanizeApprovalType(type),
+                }]
+              : []),
+            ...(requestedAmount
+              ? [{
+                  id: "requested-amount",
+                  label: "Requested amount",
+                  value: requestedAmount,
+                }]
+              : []),
+            ...(reason
+              ? [{
+                  id: "budget-reason",
+                  label: "Reason",
+                  value: reason,
+                }]
+              : []),
+            ...(decisionContext
+              ? [{
+                  id: "decision-context",
+                  label: "Decision context",
+                  value: decisionContext,
                 }]
               : []),
             ...(readStringArrayLength(event.payload, "issueIds")
@@ -174,10 +212,15 @@ export function mapPluginEventToAperture(event: PluginEvent): ApertureEvent | nu
           ],
         },
         provenance: {
-          whyNow: "Paperclip is waiting on a human approval before work can continue.",
-          factors: ["approval", "operator decision"],
+          whyNow: budgetOverride
+            ? "Budget controls are blocking work until a board decision lands."
+            : "Paperclip is waiting on a human approval before work can continue.",
+          factors: budgetOverride
+            ? ["budget stop", "approval", "operator decision"]
+            : ["approval", "operator decision"],
         },
       };
+      }
 
     case "approval.decided":
     case "approval.approved":

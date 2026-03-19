@@ -18,10 +18,10 @@ type Posture = {
   label: "calm" | "elevated" | "busy";
 };
 
-// Aperture brand accent — matches the TUI's ANSI 74 (#5FAFAF)
+// Aperture brand accent (#007ACC)
 // Uses inline styles because the host Tailwind JIT won't scan plugin bundles
-// for arbitrary values like text-[#5FAFAF].
-const ACCENT_COLOR = "#5FAFAF";
+// for arbitrary values.
+const ACCENT_COLOR = "#007ACC";
 const ACCENT_STYLE: React.CSSProperties = { color: ACCENT_COLOR };
 const ACCENT_DIM_STYLE: React.CSSProperties = { color: ACCENT_COLOR, opacity: 0.6 };
 const ACCENT_BG_STYLE: React.CSSProperties = { backgroundColor: ACCENT_COLOR };
@@ -53,6 +53,23 @@ function formatRelativeTime(value: string): string {
 
 function sourceLabel(frame: StoredAttentionFrame): string {
   return frame.source?.label ?? "Paperclip";
+}
+
+function contextValue(frame: StoredAttentionFrame, id: string): string | undefined {
+  const item = frame.context?.items?.find((entry) => entry.id === id);
+  return typeof item?.value === "string" && item.value.trim().length > 0 ? item.value : undefined;
+}
+
+function isBudgetOverride(frame: StoredAttentionFrame): boolean {
+  return frame.provenance?.factors?.includes("budget stop") ?? false;
+}
+
+function requestedAmount(frame: StoredAttentionFrame): string | undefined {
+  return contextValue(frame, "requested-amount");
+}
+
+function budgetReason(frame: StoredAttentionFrame): string | undefined {
+  return contextValue(frame, "budget-reason");
 }
 
 function modeLabel(frame: StoredAttentionFrame): string {
@@ -126,11 +143,13 @@ function judgmentLine(frame: StoredAttentionFrame, lane: FrameLane): string {
   if (frame.provenance?.whyNow) return frame.provenance.whyNow;
 
   if (lane === "active") {
+    if (isBudgetOverride(frame)) return "Budget controls are blocking work until a board decision lands.";
     if (frame.mode === "approval") return "A human decision is blocking work right now.";
     if (frame.tone === "critical") return "This surfaced because it can displace the operator now.";
     return "This is the clearest current operator focus.";
   }
 
+  if (isBudgetOverride(frame)) return "Budget review is staged behind the current focus.";
   if (lane === "queued") return "Important enough to keep visible, but not enough to displace now.";
   return "Useful for awareness, but not interrupting.";
 }
@@ -169,6 +188,10 @@ function itemHref(frame: StoredAttentionFrame, companyPrefix: string | null | un
   return `/${companyPrefix}/${pluralType}/${entityId}`;
 }
 
+function costsHref(companyPrefix: string | null | undefined): string | null {
+  return companyPrefix ? `/${companyPrefix}/costs` : null;
+}
+
 function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" | "acknowledge" | "none" {
   if (approvalIdForFrame(frame) && (frame.responseSpec?.kind === "approval" || frame.mode === "approval")) {
     return "approval";
@@ -183,6 +206,40 @@ function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" 
 
 function compactTitle(frame: StoredAttentionFrame): string {
   return frame.title.trim().length > 0 ? frame.title : "Untitled frame";
+}
+
+// Highlight entity-like tokens in the title (agent names, identifiers like CAM-9)
+// Matches: uppercase identifiers with hyphens/numbers (CAM-9, AGENT-3), quoted names
+const ENTITY_PATTERN = /\b([A-Z][A-Z0-9]+-\d+)\b|"([^"]+)"/g;
+
+function HighlightedTitle({ text }: { text: string }) {
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  const re = new RegExp(ENTITY_PATTERN.source, "g");
+
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[1] ?? match[2] ?? match[0];
+    parts.push(
+      <span key={match.index} style={ACCENT_STYLE}>{match[1] ? token : `"${token}"`}</span>,
+    );
+    lastIndex = re.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length > 1 ? <>{parts}</> : null;
+}
+
+function renderTitle(frame: StoredAttentionFrame): ReactNode {
+  const text = compactTitle(frame);
+  const highlighted = HighlightedTitle({ text });
+  return highlighted ?? text;
 }
 
 function useAttentionPolling(
@@ -261,6 +318,7 @@ function FrameActions(props: {
   pendingId: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
+  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
   compact?: boolean;
@@ -280,6 +338,14 @@ function FrameActions(props: {
             disabled={isPending}
             onClick={() => void props.onApprove(props.frame)}
           />
+          {isBudgetOverride(props.frame) ? (
+            <ActionButton
+              label="Request revision"
+              tone="secondary"
+              disabled={isPending}
+              onClick={() => void props.onRequestRevision(props.frame)}
+            />
+          ) : null}
           <ActionButton
             label="Reject"
             tone="danger"
@@ -312,7 +378,7 @@ function FrameActions(props: {
 // ---------------------------------------------------------------------------
 
 function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
-  const items = frame.context?.items?.slice(0, 2) ?? [];
+  const items = frame.context?.items ?? [];
   if (items.length === 0) return null;
 
   return (
@@ -327,23 +393,80 @@ function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
   );
 }
 
-function NowDetails(props: { frame: StoredAttentionFrame; snapshotUpdatedAt: string }) {
+function NowDetails(props: {
+  frame: StoredAttentionFrame;
+  snapshotUpdatedAt: string;
+  companyPrefix: string | null | undefined;
+}) {
   const { frame, snapshotUpdatedAt } = props;
+  const href = itemHref(frame, props.companyPrefix);
+  const budgetHref = isBudgetOverride(frame) ? costsHref(props.companyPrefix) : null;
 
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      <div className="border border-border bg-secondary/50 px-4 py-3">
-        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Why now</div>
-        <p className="mt-1.5 text-sm leading-relaxed text-foreground/90">{judgmentLine(frame, "active")}</p>
+      {/* Summary — moved here from always-visible */}
+      {frame.summary ? (
+        <p className="text-sm leading-relaxed text-muted-foreground">{frame.summary}</p>
+      ) : null}
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {/* Why now */}
+        <div className="border border-border bg-secondary/50 px-3 py-2">
+          <div className="text-xs font-medium text-muted-foreground">Judgment</div>
+          <p className="mt-1 text-sm text-foreground/90">{judgmentLine(frame, "active")}</p>
+        </div>
+
+        {/* Request metadata */}
+        <div className="border border-border bg-secondary/50 px-3 py-2">
+          <div className="text-xs font-medium text-muted-foreground">Request</div>
+          <div className="mt-1 space-y-0.5 text-sm">
+            <div className="text-foreground/90">{sourceLabel(frame)} &middot; {modeLabel(frame)}</div>
+            <div className="text-muted-foreground">{riskLabel(frame)} &middot; {formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}</div>
+            {requestedAmount(frame) ? (
+              <div className="text-foreground/90">Amount requested: {requestedAmount(frame)}</div>
+            ) : null}
+            {budgetReason(frame) ? (
+              <div className="text-muted-foreground">{budgetReason(frame)}</div>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       <ContextItems frame={frame} />
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>{sourceLabel(frame)}</span>
-        <span className="capitalize">{modeLabel(frame)}</span>
-        <span>{riskLabel(frame)}</span>
-        <span>updated {formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}</span>
+      <div className="flex flex-wrap items-center gap-3">
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Open in Paperclip
+            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
+              <path d="M8.5 1.5h6v6" />
+              <path d="M14.5 1.5l-7 7" />
+            </svg>
+          </a>
+        ) : null}
+
+        {budgetHref ? (
+          <a
+            href={budgetHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium underline underline-offset-2 hover:opacity-80"
+            style={ACCENT_STYLE}
+          >
+            Review in Costs
+            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
+              <path d="M8.5 1.5h6v6" />
+              <path d="M14.5 1.5l-7 7" />
+            </svg>
+          </a>
+        ) : null}
       </div>
     </div>
   );
@@ -362,25 +485,25 @@ function NowPane(props: {
   posture: Posture;
   companyPrefix: string | null | undefined;
   counts: AttentionSnapshot["counts"];
-  statusLine: string;
   pendingId: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
+  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
 }) {
   const frame = props.snapshot.active;
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const prevFrameId = useRef(frame?.id);
+  const activeFrameId = frame?.id ?? null;
 
-  if (frame?.id !== prevFrameId.current) {
-    prevFrameId.current = frame?.id;
-    if (detailsOpen) setDetailsOpen(false);
-  }
+  // Reset disclosure only when the *active frame* actually changes identity
+  useEffect(() => {
+    setDetailsOpen(false);
+  }, [activeFrameId]);
 
   return (
     <section className="border border-border bg-card shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6">
+      <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/50 px-4 py-3 sm:px-6">
         <div className="flex items-center gap-2">
           <span className="text-sm" style={ACCENT_STYLE}>{props.posture.glyph}</span>
           <h2 className="text-sm font-semibold uppercase tracking-wider" style={ACCENT_STYLE}>Aperture</h2>
@@ -395,73 +518,84 @@ function NowPane(props: {
         </div>
       </div>
 
-      <div className="px-4 py-6 sm:px-6">
+      <div className="px-4 pt-6 pb-5 sm:px-6">
         {!frame ? (
           <QuietNow />
         ) : (
-          <div className="space-y-5">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                <span>Now</span>
-                <span className="normal-case tracking-normal" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
+          <div className="space-y-4">
+            {/* Row 1: NOW label */}
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <span>Now</span>
+              <span className="normal-case tracking-normal" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
+            </div>
+
+            {/* Row 2: Title */}
+            <div className="text-lg font-semibold leading-snug text-foreground">{renderTitle(frame)}</div>
+
+            {/* Row 3: Badges (left) + Actions (right) — same line */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className={toneBadgeStyle(frame).className} style={toneBadgeStyle(frame).style}>{urgencyLabel(frame)}</Badge>
+              <Badge className="border-border bg-secondary text-foreground/80">{riskLabel(frame)}</Badge>
+              <Badge className="border-border bg-secondary text-muted-foreground">{modeLabel(frame)}</Badge>
+              {isBudgetOverride(frame) ? (
+                <Badge className="border-transparent text-white" style={ACCENT_BG_STYLE}>budget stop</Badge>
+              ) : null}
+              <div className="ml-auto flex items-center gap-2">
+                <FrameActions
+                  frame={frame}
+                  lane="active"
+                  pendingId={props.pendingId}
+                  onApprove={props.onApprove}
+                  onReject={props.onReject}
+                  onRequestRevision={props.onRequestRevision}
+                  onAcknowledge={props.onAcknowledge}
+                  onDismiss={props.onDismiss}
+                />
               </div>
-              <div className="text-lg font-semibold leading-snug text-foreground">{compactTitle(frame)}</div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge className={toneBadgeStyle(frame).className} style={toneBadgeStyle(frame).style}>{urgencyLabel(frame)}</Badge>
-                <Badge className="border-border bg-secondary text-foreground/80">{riskLabel(frame)}</Badge>
-                <Badge className="border-border bg-secondary text-muted-foreground">{modeLabel(frame)}</Badge>
-              </div>
-              <p className="text-sm leading-relaxed text-muted-foreground">
-                {frame.summary ?? "Aperture surfaced this frame without additional summary text."}
-              </p>
+            </div>
+
+            {/* Row 4: Show details (chevron toggle) + Open in Paperclip (external link) */}
+            <div className="flex items-center gap-4 pb-1">
+              <button
+                type="button"
+                onClick={() => setDetailsOpen(!detailsOpen)}
+                className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
+                style={ACCENT_DIM_STYLE}
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
+                  fill="currentColor"
+                >
+                  <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+                </svg>
+                {detailsOpen ? "Hide details" : "Show details"}
+              </button>
+
               {itemHref(frame, props.companyPrefix) ? (
                 <a
                   href={itemHref(frame, props.companyPrefix)!}
-                  className="inline-flex text-xs font-medium underline underline-offset-2 text-muted-foreground hover:text-foreground"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-xs font-medium text-muted-foreground transition-opacity hover:text-foreground"
                 >
-                  View in Paperclip
+                  Open in Paperclip
+                  <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
+                    <path d="M8.5 1.5h6v6" />
+                    <path d="M14.5 1.5l-7 7" />
+                  </svg>
                 </a>
               ) : null}
             </div>
 
-            <FrameActions
-              frame={frame}
-              lane="active"
-              pendingId={props.pendingId}
-              onApprove={props.onApprove}
-              onReject={props.onReject}
-              onAcknowledge={props.onAcknowledge}
-              onDismiss={props.onDismiss}
-            />
-
-            <button
-              type="button"
-              onClick={() => setDetailsOpen(!detailsOpen)}
-              className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
-              style={ACCENT_DIM_STYLE}
-            >
-              <svg
-                viewBox="0 0 16 16"
-                className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
-                fill="currentColor"
-              >
-                <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
-              </svg>
-              {detailsOpen ? "Hide details" : "Show details"}
-            </button>
-
             {detailsOpen ? (
-              <NowDetails frame={frame} snapshotUpdatedAt={props.snapshot.updatedAt} />
+              <NowDetails frame={frame} snapshotUpdatedAt={props.snapshot.updatedAt} companyPrefix={props.companyPrefix} />
             ) : null}
           </div>
         )}
       </div>
 
-      {frame ? (
-        <div className="border-t border-border px-4 py-2 text-xs text-muted-foreground sm:px-6">
-          {props.statusLine}
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -478,6 +612,7 @@ function NextRow(props: {
   pendingId: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
+  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
 }) {
@@ -495,11 +630,15 @@ function NextRow(props: {
           {String(props.rank).padStart(2, "0")}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-          {compactTitle(frame)}
+          {renderTitle(frame)}
         </span>
-        <span className="shrink-0 text-xs text-muted-foreground">{sourceLabel(frame)}</span>
+        {isBudgetOverride(frame) ? (
+          <Badge className="border-transparent shrink-0 text-white" style={ACCENT_BG_STYLE}>budget</Badge>
+        ) : null}
         <Badge className={cn("shrink-0", toneBadgeStyle(frame).className)} style={toneBadgeStyle(frame).style}>{urgencyLabel(frame)}</Badge>
-        <span className="shrink-0 text-xs capitalize text-muted-foreground">{modeLabel(frame)}</span>
+        <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.7 }}>
+          {formatRelativeTime(frameUpdatedAt(frame, props.snapshotUpdatedAt))}
+        </span>
         <svg
           viewBox="0 0 16 16"
           className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")}
@@ -532,6 +671,7 @@ function NextRow(props: {
             pendingId={props.pendingId}
             onApprove={props.onApprove}
             onReject={props.onReject}
+            onRequestRevision={props.onRequestRevision}
             onAcknowledge={props.onAcknowledge}
             onDismiss={props.onDismiss}
           />
@@ -548,6 +688,7 @@ function NextLane(props: {
   pendingId: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
+  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
 }) {
@@ -572,6 +713,7 @@ function NextLane(props: {
             pendingId={props.pendingId}
             onApprove={props.onApprove}
             onReject={props.onReject}
+            onRequestRevision={props.onRequestRevision}
             onAcknowledge={props.onAcknowledge}
             onDismiss={props.onDismiss}
           />
@@ -605,7 +747,7 @@ function AmbientRow(props: {
         className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-accent/50 sm:px-6"
       >
         <span className="text-xs text-muted-foreground" style={{ opacity: 0.5 }} aria-hidden="true">~</span>
-        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{compactTitle(frame)}</span>
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{renderTitle(frame)}</span>
         <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
         <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.5 }}>
           {formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}
@@ -763,7 +905,7 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
       </span>
       <span className="flex-1 truncate">Aperture</span>
       {actionable > 0 ? (
-        <span className="inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold text-white" style={ACCENT_BG_STYLE}>
+        <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
           {actionable}
         </span>
       ) : null}
@@ -868,13 +1010,35 @@ export function AttentionPage(props: PluginPageProps) {
     }
   }
 
-  const statusLine = useMemo(() => {
-    if (statusOverride) return statusOverride;
-    if (snapshot?.active) return `Focused on ${compactTitle(snapshot.active)}.`;
-    if (nextRows[0]) return `Quiet now. ${compactTitle(nextRows[0].frame)} is next in line.`;
-    if (ambientRows[0]) return "Quiet now. Ambient awareness remains available.";
-    return "Quiet surface. Aperture is waiting for the next meaningful event.";
-  }, [ambientRows, nextRows, snapshot?.active, statusOverride]);
+  async function requestApprovalRevision(frame: StoredAttentionFrame) {
+    const approvalId = approvalIdForFrame(frame);
+    if (!approvalId) {
+      setStatusOverride("This frame is not backed by a Paperclip approval.");
+      return;
+    }
+
+    setPendingId(frame.id);
+    try {
+      const response = await window.fetch(`/api/approvals/${approvalId}/request-revision`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Revision request failed (${response.status}).`);
+      }
+
+      setStatusOverride(`Requested revision for ${compactTitle(frame)}.`);
+      nudgeRefresh();
+    } catch (actionError) {
+      setStatusOverride(actionError instanceof Error ? actionError.message : "Failed to request approval revision.");
+    } finally {
+      setPendingId(null);
+    }
+  }
 
   if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Select a company to open Aperture.</div>;
   if (loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Loading attention center{"\u2026"}</div>;
@@ -888,10 +1052,10 @@ export function AttentionPage(props: PluginPageProps) {
         posture={posture}
         companyPrefix={props.context.companyPrefix}
         counts={snapshot.counts}
-        statusLine={statusLine}
         pendingId={pendingId}
         onApprove={(frame) => submitApprovalDecision(frame, "approve")}
         onReject={(frame) => submitApprovalDecision(frame, "reject")}
+        onRequestRevision={requestApprovalRevision}
         onAcknowledge={acknowledgeFrame}
         onDismiss={dismissFrame}
       />
@@ -903,6 +1067,7 @@ export function AttentionPage(props: PluginPageProps) {
         pendingId={pendingId}
         onApprove={(frame) => submitApprovalDecision(frame, "approve")}
         onReject={(frame) => submitApprovalDecision(frame, "reject")}
+        onRequestRevision={requestApprovalRevision}
         onAcknowledge={acknowledgeFrame}
         onDismiss={dismissFrame}
       />
