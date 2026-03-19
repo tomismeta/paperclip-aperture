@@ -18,13 +18,28 @@ type Posture = {
   label: "calm" | "elevated" | "busy";
 };
 
-// Aperture brand accent (#007ACC)
+// Aperture brand accent
 // Uses inline styles because the host Tailwind JIT won't scan plugin bundles
 // for arbitrary values.
-const ACCENT_COLOR = "#007ACC";
+const ACCENT_COLOR = "#19A1FF";
 const ACCENT_STYLE: React.CSSProperties = { color: ACCENT_COLOR };
-const ACCENT_DIM_STYLE: React.CSSProperties = { color: ACCENT_COLOR, opacity: 0.6 };
 const ACCENT_BG_STYLE: React.CSSProperties = { backgroundColor: ACCENT_COLOR };
+
+/**
+ * Forces accent color with !important to override any host Tailwind rules.
+ */
+function useAccentColor<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    ref.current?.style.setProperty("color", ACCENT_COLOR, "important");
+  });
+  return ref;
+}
+
+function Accent({ children, className }: { children: React.ReactNode; className?: string }) {
+  const ref = useAccentColor<HTMLSpanElement>();
+  return <span ref={ref} className={className}>{children}</span>;
+}
 
 function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
@@ -224,7 +239,7 @@ function HighlightedTitle({ text }: { text: string }) {
     }
     const token = match[1] ?? match[2] ?? match[0];
     parts.push(
-      <span key={match.index} style={ACCENT_STYLE}>{match[1] ? token : `"${token}"`}</span>,
+      <Accent key={match.index}>{match[1] ? token : `"${token}"`}</Accent>,
     );
     lastIndex = re.lastIndex;
   }
@@ -332,12 +347,6 @@ function FrameActions(props: {
     <div className={cn("flex items-center gap-2", props.compact && "justify-end")}>
       {actionMode === "approval" ? (
         <>
-          <ActionButton
-            label={isPending ? "Submitting\u2026" : "Approve"}
-            tone="primary"
-            disabled={isPending}
-            onClick={() => void props.onApprove(props.frame)}
-          />
           {isBudgetOverride(props.frame) ? (
             <ActionButton
               label="Request revision"
@@ -346,6 +355,12 @@ function FrameActions(props: {
               onClick={() => void props.onRequestRevision(props.frame)}
             />
           ) : null}
+          <ActionButton
+            label={isPending ? "Submitting\u2026" : "Approve"}
+            tone="primary"
+            disabled={isPending}
+            onClick={() => void props.onApprove(props.frame)}
+          />
           <ActionButton
             label="Reject"
             tone="danger"
@@ -452,12 +467,12 @@ function NowDetails(props: {
         ) : null}
 
         {budgetHref ? (
-          <a
+          <Accent><a
             href={budgetHref}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs font-medium underline underline-offset-2 hover:opacity-80"
-            style={ACCENT_STYLE}
+            style={{ color: "inherit" }}
           >
             Review in Costs
             <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -465,7 +480,7 @@ function NowDetails(props: {
               <path d="M8.5 1.5h6v6" />
               <path d="M14.5 1.5l-7 7" />
             </svg>
-          </a>
+          </a></Accent>
         ) : null}
       </div>
     </div>
@@ -474,7 +489,7 @@ function NowDetails(props: {
 
 function QuietNow() {
   return (
-    <div className="py-2">
+    <div className="flex min-h-16 items-center">
       <div className="text-sm text-muted-foreground">Nothing active right now.</div>
     </div>
   );
@@ -503,22 +518,27 @@ function NowPane(props: {
 
   return (
     <section className="border border-border bg-card shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/50 px-4 py-3 sm:px-6">
+      <div className="flex items-center justify-between gap-3 border-b border-border bg-accent px-4 py-4 sm:px-6">
         <div className="flex items-center gap-2">
-          <span className="text-sm" style={ACCENT_STYLE}>{props.posture.glyph}</span>
-          <h2 className="text-sm font-semibold uppercase tracking-wider" style={ACCENT_STYLE}>Aperture</h2>
-          <span className="text-xs" style={ACCENT_DIM_STYLE}>
-            {props.posture.label}
-          </span>
+          <Accent className="text-base leading-none">{props.posture.glyph}</Accent>
+          <Accent className="text-[18px] leading-none font-bold uppercase tracking-[0.18em]">Aperture</Accent>
+          <Accent className="text-sm leading-none">{props.posture.label}</Accent>
         </div>
         <div className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
-          <span style={props.counts.active > 0 ? ACCENT_STYLE : undefined}>now {props.counts.active}</span>
-          <span style={props.counts.queued > 0 ? ACCENT_STYLE : undefined}>next {props.counts.queued}</span>
-          <span>ambient {props.counts.ambient}</span>
+          <span className={props.counts.active > 0 ? "font-semibold" : ""}>
+            now {props.counts.active > 0 ? <Accent>{props.counts.active}</Accent> : props.counts.active}
+          </span>
+          <span className={props.counts.queued > 0 ? "font-semibold" : ""}>
+            next {props.counts.queued > 0 ? <Accent>{props.counts.queued}</Accent> : props.counts.queued}
+          </span>
+          <span className={props.counts.ambient > 0 ? "font-semibold" : ""}>
+            ambient {props.counts.ambient > 0 ? <Accent>{props.counts.ambient}</Accent> : props.counts.ambient}
+          </span>
         </div>
       </div>
 
-      <div className="px-4 pt-6 pb-5 sm:px-6">
+      <div style={{ height: "1.25rem" }} aria-hidden="true" />
+      <div className="px-4 pb-5 sm:px-6">
         {!frame ? (
           <QuietNow />
         ) : (
@@ -556,11 +576,11 @@ function NowPane(props: {
 
             {/* Row 4: Show details (chevron toggle) + Open in Paperclip (external link) */}
             <div className="flex items-center gap-4 pb-1">
-              <button
+              <Accent><button
                 type="button"
                 onClick={() => setDetailsOpen(!detailsOpen)}
                 className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
-                style={ACCENT_DIM_STYLE}
+                style={{ color: "inherit" }}
               >
                 <svg
                   viewBox="0 0 16 16"
@@ -570,7 +590,7 @@ function NowPane(props: {
                   <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
                 </svg>
                 {detailsOpen ? "Hide details" : "Show details"}
-              </button>
+              </button></Accent>
 
               {itemHref(frame, props.companyPrefix) ? (
                 <a
@@ -626,9 +646,9 @@ function NextRow(props: {
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50 sm:px-6"
       >
-        <span className="w-5 shrink-0 text-xs font-medium tabular-nums" style={ACCENT_DIM_STYLE}>
+        <Accent className="w-5 shrink-0 text-xs font-medium tabular-nums">
           {String(props.rank).padStart(2, "0")}
-        </span>
+        </Accent>
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {renderTitle(frame)}
         </span>
@@ -746,7 +766,6 @@ function AmbientRow(props: {
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-accent/50 sm:px-6"
       >
-        <span className="text-xs text-muted-foreground" style={{ opacity: 0.5 }} aria-hidden="true">~</span>
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{renderTitle(frame)}</span>
         <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
         <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.5 }}>
@@ -763,7 +782,7 @@ function AmbientRow(props: {
       </button>
 
       {expanded ? (
-        <div className="flex items-center gap-3 px-4 pb-3 pl-10 sm:px-6 sm:pl-12">
+        <div className="flex items-center gap-3 px-4 pb-3 sm:px-6">
           {href ? (
             <a
               href={href}
@@ -846,11 +865,11 @@ export function DashboardWidget(props: PluginWidgetProps) {
 
   return (
     <div className="border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="text-sm" style={ACCENT_STYLE}>{posture.glyph}</span>
-        <span className="font-semibold uppercase tracking-wider" style={ACCENT_STYLE}>Aperture</span>
-        <span style={ACCENT_DIM_STYLE}>{posture.label}</span>
-        <span className="ml-auto tabular-nums">
+      <div className="flex items-center gap-2 text-xs">
+        <Accent className="text-sm">{posture.glyph}</Accent>
+        <Accent className="font-semibold uppercase tracking-wider">Aperture</Accent>
+        <Accent>{posture.label}</Accent>
+        <span className="ml-auto tabular-nums text-muted-foreground">
           now {data.counts.active} · next {data.counts.queued} · ambient {data.counts.ambient}
         </span>
       </div>
@@ -896,11 +915,13 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
           strokeLinecap="round"
           strokeLinejoin="round"
         >
-          <path d="M5 12h6" />
-          <path d="M9 8v8" />
-          <circle cx="16.5" cy="8" r="3.5" />
-          <path d="M14 16h5" />
-          <path d="M14 19h4" />
+          <circle cx="12" cy="12" r="9" />
+          <path d="m14.3 8 5.2 9" />
+          <path d="M9.7 8h10.4" />
+          <path d="m7.4 12 5.2-9" />
+          <path d="m9.7 16-5.2-9" />
+          <path d="M14.3 16H3.9" />
+          <path d="m16.6 12-5.2 9" />
         </svg>
       </span>
       <span className="flex-1 truncate">Aperture</span>
@@ -1041,8 +1062,8 @@ export function AttentionPage(props: PluginPageProps) {
   }
 
   if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Select a company to open Aperture.</div>;
-  if (loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Loading attention center{"\u2026"}</div>;
-  if (error) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Plugin error: {error.message}</div>;
+  if (!snapshot && loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Loading attention center{"\u2026"}</div>;
+  if (!snapshot && error) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Plugin error: {error.message}</div>;
   if (!snapshot || !posture) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">No attention state has been captured for this company yet.</div>;
 
   return (

@@ -1,24 +1,45 @@
 # Paperclip Aperture
 
-An Aperture-powered attention center for Paperclip.
+**An Aperture-powered attention surface for Paperclip.**
 
-This repo is intentionally separate from the Paperclip monorepo. The plugin is
-host-first in naming and structure:
+`paperclip-aperture` is a Paperclip plugin that treats Paperclip as the host runtime and UI shell, while importing [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core) as the judgment engine.
 
-- host: Paperclip
+It turns Paperclip approvals, issue activity, and other operator-facing events into an Aperture-style attention view:
+
+`Paperclip events -> plugin mapper -> Aperture judgment -> Paperclip UI`
+
+Links:
+
+- Aperture core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
+- Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
+- Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
+
+## What This Plugin Is
+
+This repo is intentionally separate from the Paperclip monorepo.
+
+The architecture is host-first:
+
+- host/runtime: Paperclip
 - judgment engine: Aperture
-- artifact: `@tomismeta/paperclip-aperture`
+- plugin artifact: `@tomismeta/paperclip-aperture`
 
-The current scaffold is set up as a real Paperclip plugin starter, not just a
-generic example. It already includes:
+The goal is to prove that Aperture can live inside Paperclip as a normal plugin, without changing Aperture core.
 
-- an embedded `@tomismeta/aperture-core` worker store
+## Current Product Shape
+
+What is real in this repo today:
+
+- a real Paperclip plugin repo, not a Paperclip core patch
+- embedded `@tomismeta/aperture-core` inside the plugin worker
 - a Paperclip event-to-Aperture mapping layer
-- plugin data/actions split into `src/handlers/`
-- a company-scoped attention page and dashboard widget
-- tests that exercise the event loop end to end
+- a company-scoped attention page
+- a dashboard widget
+- a sidebar entry
+- approval handling, including budget-specific approval semantics
+- tests covering the main event loop and approval mapping paths
 
-## Structure
+## Repo Structure
 
 ```text
 src/
@@ -44,36 +65,57 @@ src/
 pnpm install
 pnpm typecheck
 pnpm build
-pnpm dev            # watch builds
+pnpm dev
 pnpm test
 ```
 
-This scaffold snapshots `@paperclipai/plugin-sdk` and `@paperclipai/shared` from a local Paperclip checkout at:
+This repo currently snapshots `@paperclipai/plugin-sdk` and `@paperclipai/shared` from a local Paperclip checkout into `.paperclip-sdk/` for development.
 
-`/Users/tom/dev/paperclip/packages/plugins/sdk`
-
-The packed tarballs live in `.paperclip-sdk/` for local development. Before publishing this plugin, switch those dependencies to published package versions once they are available on npm.
-
-
+Before publishing this plugin package itself, those should be switched to published Paperclip package versions when available.
 
 ## Install Into Paperclip
+
+Build the plugin:
+
+```bash
+cd /path/to/paperclip-aperture
+pnpm install
+pnpm build
+```
+
+Then install it into a local Paperclip instance by path:
 
 ```bash
 curl -X POST http://127.0.0.1:3100/api/plugins/install \
   -H "Content-Type: application/json" \
-  -d '{"packageName":"/Users/tom/dev/paperclip-aperture","isLocalPath":true}'
+  -d '{"packageName":"/absolute/path/to/paperclip-aperture","isLocalPath":true}'
 ```
 
-## Initial Product Shape
+## Why This Exists
 
-- `page` route at `/:companyPrefix/aperture`
-- `dashboardWidget` summary for now/next/ambient counts
-- approval and run-failure ingestion into Aperture attention state
-- local acknowledge/dismiss response loop for supervised frames
+Paperclip already has the host pieces:
 
-## Next Recommended Steps
+- agent workflows
+- approvals
+- operator UI surfaces
+- plugin lifecycle and event subscriptions
 
-1. Add richer Paperclip event coverage for `approval.decided`, `issue.updated`, and blocked agent states.
-2. Add a Paperclip-native return path for approval approve/reject actions.
-3. Add entity-specific tabs once the main page UX feels right.
-4. Replace the local tarball SDK deps with published versions when ready to publish.
+Aperture already has the judgment piece:
+
+- deciding what deserves attention now
+- what should wait until next
+- what should stay ambient
+
+This plugin is the bridge between those two systems.
+
+## Status
+
+This is a working integration prototype.
+
+It is ready for review as:
+
+- a plugin architecture pattern
+- an embedded Aperture judgment path inside Paperclip
+- an alternative operator attention surface
+
+It should not yet be framed as fully production-hardened or complete.
