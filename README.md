@@ -44,6 +44,32 @@ paperclipai plugin install /absolute/path/to/paperclip-aperture
 
 After install, open Paperclip and use the `Focus` entry in the sidebar.
 
+## Flow
+
+```text
+Paperclip events
+  approvals / issues / human-facing signals
+            |
+            v
+paperclip-aperture
+  normalize host facts into Aperture inputs
+            |
+            v
+Aperture Core SDK
+  deterministically judge now / next / ambient
+            |
+            v
+Focus in Paperclip
+  sidebar / page / widget
+            |
+            v
+human response
+  approve / reject / request revision / acknowledge
+            |
+            v
+Paperclip updates, Focus reshuffles
+```
+
 ## What You Get
 
 - a Focus surface inside Paperclip
