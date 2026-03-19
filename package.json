@@ -2,13 +2,27 @@
   "name": "@tomismeta/paperclip-aperture",
   "version": "0.1.2",
   "type": "module",
-  "private": true,
+  "private": false,
   "description": "An Aperture-powered attention center for Paperclip",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomismeta/paperclip-aperture.git"
+  },
+  "homepage": "https://github.com/tomismeta/paperclip-aperture#readme",
+  "bugs": {
+    "url": "https://github.com/tomismeta/paperclip-aperture/issues"
+  },
+  "files": [
+    "dist/**/*.js",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsx ./esbuild.config.ts",
     "build:rollup": "pnpm exec rollup --config ./rollup.config.ts --configPlugin @rollup/plugin-typescript",
     "dev": "tsx ./esbuild.config.ts --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
+    "prepack": "pnpm build",
     "test": "vitest run --config ./vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -26,19 +40,16 @@
   ],
   "author": "Tom Is Meta",
   "license": "MIT",
-  "pnpm": {
-    "overrides": {
-      "@paperclipai/shared": "file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz"
-    }
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.318.0",
     "@tomismeta/aperture-core": "^0.2.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@paperclipai/shared": "file:.paperclip-sdk/paperclipai-shared-0.3.1.tgz",
-    "@paperclipai/plugin-sdk": "file:.paperclip-sdk/paperclipai-plugin-sdk-1.0.0.tgz",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-typescript": "^12.1.2",
     "@types/node": "^24.6.0",

@@ -8,7 +8,7 @@
 [![npm aperture core](https://img.shields.io/npm/v/%40tomismeta%2Faperture-core?label=aperture%20core&color=0f766e)](https://www.npmjs.com/package/@tomismeta/aperture-core)
 [![paperclip](https://img.shields.io/badge/host-paperclip-2563eb)](https://github.com/paperclipai/paperclip)
 
-<img src="docs/assets/paperclip-aperture.png" alt="Paperclip Aperture screenshot" width="1400">
+<img src="https://raw.githubusercontent.com/tomismeta/paperclip-aperture/main/docs/assets/paperclip-aperture.png" alt="Paperclip Aperture screenshot" width="1400">
 <p></p>
 </div>
 
@@ -192,9 +192,7 @@ pnpm dev
 pnpm test
 ```
 
-This repo currently snapshots `@paperclipai/plugin-sdk` and `@paperclipai/shared` from a local Paperclip checkout into `.paperclip-sdk/` for development.
-
-Before publishing this plugin package itself, those should be switched to published Paperclip package versions when available.
+This repo uses the published Paperclip SDK packages directly and is being prepared for npm distribution as a normal installable plugin artifact.
 
 ## Status
 
