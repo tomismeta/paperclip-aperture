@@ -14,7 +14,7 @@
 
 ## Demo
 
-![Focus demo](./docs/assets/focus-demo.gif)
+<img src="https://raw.githubusercontent.com/tomismeta/paperclip-aperture/main/docs/assets/focus-demo.gif" alt="Focus demo" width="1400">
 
 Short assets:
 
