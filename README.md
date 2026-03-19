@@ -4,6 +4,7 @@
 
 **A Focus view for Paperclip powered by Aperture's deterministic attention engine.**
 
+[![npm](https://img.shields.io/npm/v/%40tomismeta%2Fpaperclip-aperture?label=npm&color=2563eb)](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
 [![aperture github](https://img.shields.io/badge/aperture-tomismeta%2Faperture-18181b)](https://github.com/tomismeta/aperture)
 [![npm aperture core](https://img.shields.io/npm/v/%40tomismeta%2Faperture-core?label=aperture%20core&color=0f766e)](https://www.npmjs.com/package/@tomismeta/aperture-core)
 [![paperclip](https://img.shields.io/badge/host-paperclip-2563eb)](https://github.com/paperclipai/paperclip)
@@ -28,17 +29,6 @@ paperclipai run
 ```
 
 Then install the plugin with the command above.
-
-If you are testing from source:
-
-```bash
-git clone git@github.com:tomismeta/paperclip-aperture.git
-cd paperclip-aperture
-pnpm install
-pnpm build
-
-paperclipai plugin install /absolute/path/to/paperclip-aperture
-```
 
 After install, open Paperclip and use the `Focus` entry in the sidebar.
 
@@ -98,6 +88,7 @@ pnpm release:check
 
 ## Links
 
+- Plugin on npm: [`@tomismeta/paperclip-aperture`](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
 - Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
 - Aperture Core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
 - Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
