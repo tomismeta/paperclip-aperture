@@ -1,6 +1,6 @@
 {
   "name": "@tomismeta/paperclip-aperture",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "private": false,
   "description": "A Focus view for Paperclip that ranks approvals, issue activity, and other human-facing events into now, next, and ambient.",
