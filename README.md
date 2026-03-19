@@ -8,13 +8,9 @@
 [![npm aperture core](https://img.shields.io/npm/v/%40tomismeta%2Faperture-core?label=aperture%20core&color=0f766e)](https://www.npmjs.com/package/@tomismeta/aperture-core)
 [![paperclip](https://img.shields.io/badge/host-paperclip-2563eb)](https://github.com/paperclipai/paperclip)
 
-<img src="https://raw.githubusercontent.com/tomismeta/paperclip-aperture/main/docs/assets/paperclip-aperture.png" alt="Paperclip Aperture screenshot" width="1400">
+<img src="https://raw.githubusercontent.com/tomismeta/paperclip-aperture/main/docs/assets/focus-demo.gif" alt="Paperclip Aperture" width="1400">
 <p></p>
 </div>
-
-## Demo
-
-<img src="https://raw.githubusercontent.com/tomismeta/paperclip-aperture/main/docs/assets/focus-demo.gif" alt="Focus demo" width="1400">
 
 Short assets:
 
