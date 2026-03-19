@@ -2,6 +2,8 @@
 
 **An Aperture-powered attention surface for Paperclip.**
 
+![Paperclip Aperture screenshot](./docs/assets/paperclip-aperture.png)
+
 `paperclip-aperture` is a Paperclip plugin that treats Paperclip as the host runtime and UI shell, while importing [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core) as the judgment engine.
 
 It turns Paperclip approvals, issue activity, and other operator-facing events into an Aperture-style attention view:

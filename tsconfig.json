@@ -18,7 +18,10 @@
   },
   "include": [
     "src",
-    "tests"
+    "tests",
+    "esbuild.config.ts",
+    "rollup.config.ts",
+    "vitest.config.ts"
   ],
   "exclude": [
     "dist",
