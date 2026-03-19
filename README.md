@@ -15,40 +15,27 @@
 
 Paperclip Aperture treats Paperclip as the host runtime and UI shell, while importing [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) via the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
-It turns Paperclip approvals, issue activity, and other operator-facing events into an Aperture-style attention surface:
+It turns Paperclip approvals, issue activity, and other operator-facing events into a Focus surface that ranks what deserves attention now, next, and ambient.
 
-```text
-+------------------+     +-------------------+     +-------------------+     +------------------+     +------------------+
-| Paperclip events | --> | Plugin translates | --> | Aperture judges   | --> | Paperclip renders| --> | Human responds   |
-| approvals        |     | explicit facts    |     | now / next /      |     | attention UI     |     | into host action |
-| issues           |     | from host payloads|     | ambient           |     | + operator tools |     | approve / reject |
-| run failures     |     |                   |     |                   |     |                  |     | acknowledge      |
-+------------------+     +-------------------+     +-------------------+     +------------------+     +------------------+
-```
-
-Links:
-
-- Aperture core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
-- Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
-- Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
-
-## Start Here
-
-Choose one path:
-
-- **install the plugin locally** if you want to run it in Paperclip today
-- **run the demo** if you want a short live walkthrough
-- **read the architecture** if you want to understand how Aperture is embedded inside the plugin
-
-### Run The Demo
-
-Use the live demo guide in [docs/DEMO.md](./docs/DEMO.md).
-
-### Install The Plugin Locally
+## Install
 
 This plugin is not yet published to npm.
 
-Today, the supported path is a local-path plugin install into a Paperclip instance:
+Today, the supported path is a local-path install into a running Paperclip instance.
+
+If Paperclip is already running, the shortest path is:
+
+```bash
+git clone git@github.com:tomismeta/paperclip-aperture.git
+cd paperclip-aperture
+pnpm install
+pnpm build
+
+cd /path/to/paperclip
+pnpm paperclipai plugin install /absolute/path/to/paperclip-aperture
+```
+
+If you need to start Paperclip first:
 
 ```bash
 git clone git@github.com:tomismeta/paperclip-aperture.git
@@ -82,21 +69,11 @@ Then open Paperclip and navigate to:
 - `Settings -> Plugins -> Paperclip Aperture`
 - `/<company-prefix>/aperture`
 
-Future install shape once this plugin is published:
+Once this plugin is published to npm, the install shape becomes:
 
 ```bash
 pnpm paperclipai plugin install @tomismeta/paperclip-aperture
 ```
-
-### Understand The Embedding Model
-
-The architecture is host-first:
-
-- host/runtime: Paperclip
-- judgment engine: Aperture
-- plugin artifact: `@tomismeta/paperclip-aperture`
-
-The goal is to prove that Aperture can live inside Paperclip as a normal plugin, without changing Aperture core.
 
 ## What This Plugin Is
 
@@ -198,6 +175,13 @@ pnpm test
 ```
 
 This repo uses the published Paperclip SDK packages directly and is being prepared for npm distribution as a normal installable plugin artifact.
+
+## Links
+
+- Aperture core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
+- Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
+- Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
+- Demo guide: [docs/DEMO.md](./docs/DEMO.md)
 
 ## Status
 
