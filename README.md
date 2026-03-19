@@ -2,7 +2,7 @@
 
 # Paperclip Aperture
 
-**A Paperclip plugin powered by Aperture's deterministic attention and judgment engine.**
+**A Paperclip plugin powered by Aperture's deterministic attention engine.**
 
 [![github](https://img.shields.io/badge/github-tomismeta%2Fpaperclip--aperture-18181b)](https://github.com/tomismeta/paperclip-aperture)
 [![npm aperture core](https://img.shields.io/npm/v/%40tomismeta%2Faperture-core?label=aperture%20core&color=0f766e)](https://www.npmjs.com/package/@tomismeta/aperture-core)
@@ -24,7 +24,7 @@ Short assets:
 - Live walkthrough guide: [docs/DEMO.md](./docs/DEMO.md)
 
 
-Paperclip Aperture treats Paperclip as the host runtime and UI shell, while importing [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core) as the judgment engine.
+Paperclip Aperture treats Paperclip as the host runtime and UI shell, while importing [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) via the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
 It turns Paperclip approvals, issue activity, and other operator-facing events into an Aperture-style attention surface:
 
