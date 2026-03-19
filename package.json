@@ -1,9 +1,9 @@
 {
   "name": "@tomismeta/paperclip-aperture",
-  "version": "0.1.2",
+  "version": "0.1.0",
   "type": "module",
   "private": false,
-  "description": "An Aperture-powered attention center for Paperclip",
+  "description": "A Focus view for Paperclip that ranks approvals, issue activity, and other human-facing events into now, next, and ambient.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tomismeta/paperclip-aperture.git"
@@ -37,8 +37,12 @@
     "paperclip",
     "plugin",
     "aperture",
-    "attention",
-    "supervision"
+    "focus",
+    "attention-management",
+    "human-in-the-loop",
+    "approval-workflows",
+    "supervision",
+    "typescript"
   ],
   "author": "Tom Is Meta",
   "license": "MIT",
