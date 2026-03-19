@@ -32,30 +32,19 @@ Then install the plugin with the command above.
 
 After install, open Paperclip and use the `Focus` entry in the sidebar.
 
-## Flow
+## Napkin Diagram
 
 ```text
-Paperclip events
-  approvals / issues / human-facing signals
-            |
-            v
-paperclip-aperture
-  normalize host facts into Aperture inputs
-            |
-            v
-Aperture Core SDK
-  deterministically judge now / next / ambient
-            |
-            v
-Focus in Paperclip
-  sidebar / page / widget
-            |
-            v
-human response
-  approve / reject / request revision / acknowledge
-            |
-            v
-Paperclip updates, Focus reshuffles
++--------------+   +--------------+   +--------------+   +--------------+   +--------------+
+| Arrive       |   | Translate    |   | Judge        |   | Show         |   | Respond      |
+| events       |   | facts        |   | attention    |   | surface      |   | action       |
++--------------+   +--------------+   +--------------+   +--------------+   +--------------+
+       |                  |                  |                  |                  |
+       +----->            +----->            +----->            +----->            |
+
+tool hooks         explicit facts      does this         what the          operator decision
+from Paperclip     from raw payloads   deserve           operator          carried back
+and agents                             attention now?    actually sees     to the tool
 ```
 
 ## What You Get
