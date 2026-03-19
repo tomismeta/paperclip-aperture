@@ -4,7 +4,6 @@
 
 **A Paperclip plugin powered by Aperture's deterministic attention engine.**
 
-[![github](https://img.shields.io/badge/github-tomismeta%2Fpaperclip--aperture-18181b)](https://github.com/tomismeta/paperclip-aperture)
 [![aperture github](https://img.shields.io/badge/aperture-tomismeta%2Faperture-18181b)](https://github.com/tomismeta/aperture)
 [![npm aperture core](https://img.shields.io/npm/v/%40tomismeta%2Faperture-core?label=aperture%20core&color=0f766e)](https://www.npmjs.com/package/@tomismeta/aperture-core)
 [![paperclip](https://img.shields.io/badge/host-paperclip-2563eb)](https://github.com/paperclipai/paperclip)
