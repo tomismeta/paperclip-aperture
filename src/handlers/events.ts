@@ -1,7 +1,8 @@
 import type { PluginContext, PluginEvent } from "@paperclipai/plugin-sdk";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import { mapPluginEventToAperture } from "../aperture/event-mapper.js";
-import { emitAttentionUpdate, persistSnapshot } from "./shared.js";
+import type { AttentionLedgerEventEntry } from "../aperture/types.js";
+import { emitAttentionUpdate, persistLedger, persistSnapshot } from "./shared.js";
 
 const SUBSCRIBED_EVENTS: readonly string[] = [
   "approval.created",
@@ -19,6 +20,27 @@ const SUBSCRIBED_EVENTS: readonly string[] = [
   "agent.run.cancelled",
   "agent.status_changed",
 ] as const;
+
+function shouldCaptureEvent(
+  config: Record<string, unknown>,
+  eventType: string,
+): boolean {
+  if (
+    (eventType === "issue.created"
+      || eventType === "issue.updated"
+      || eventType === "issue.comment.created"
+      || eventType === "issue.comment_added")
+    && config.captureIssueLifecycle === false
+  ) {
+    return false;
+  }
+
+  if (eventType === "agent.run.failed" && config.captureRunFailures === false) {
+    return false;
+  }
+
+  return true;
+}
 
 async function enrichIssuePayload(
   ctx: PluginContext,
@@ -60,9 +82,26 @@ async function handleEvent(
   store: ApertureCompanyStore,
   event: PluginEvent,
 ): Promise<void> {
+  const config = await ctx.config.get();
+  if (!shouldCaptureEvent(config, event.eventType)) return;
+
   const enriched = await enrichIssuePayload(ctx, event);
   const mapped = mapPluginEventToAperture(enriched);
   if (!mapped) return;
+
+  const ledgerEntry: AttentionLedgerEventEntry = {
+    kind: "event",
+    id: `${enriched.eventId}:event`,
+    occurredAt: enriched.occurredAt,
+    source: {
+      eventType: enriched.eventType,
+      entityId: enriched.entityId,
+      entityType: enriched.entityType,
+    },
+    apertureEvent: mapped,
+  };
+
+  const nextLedger = store.appendLedgerEntry(enriched.companyId, ledgerEntry);
 
   const { snapshot } = store.ingest(enriched.companyId, mapped, {
     eventType: enriched.eventType,
@@ -70,6 +109,7 @@ async function handleEvent(
     entityType: enriched.entityType,
   });
 
+  await persistLedger(ctx, enriched.companyId, nextLedger);
   await persistSnapshot(ctx, enriched.companyId, snapshot);
   emitAttentionUpdate(ctx, {
     companyId: enriched.companyId,

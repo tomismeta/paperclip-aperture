@@ -6,7 +6,11 @@ import {
   type PluginWidgetProps,
 } from "@paperclipai/plugin-sdk/ui";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AttentionSnapshot, StoredAttentionFrame } from "../aperture/types.js";
+import {
+  createEmptySnapshot,
+  type AttentionSnapshot,
+  type StoredAttentionFrame,
+} from "../aperture/types.js";
 
 type FrameLane = "active" | "queued" | "ambient";
 type DisplayFrame = {
@@ -16,6 +20,21 @@ type DisplayFrame = {
 type Posture = {
   glyph: "\u25CB" | "\u25D0" | "\u25CF";
   label: "calm" | "elevated" | "busy";
+};
+type ApprovalRecord = {
+  id: string;
+  companyId: string;
+  type: string;
+  status: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+type ApprovalQueryResult = {
+  data: ApprovalRecord[] | null;
+  loading: boolean;
+  error: Error | null;
+  refresh: () => void;
 };
 
 // Aperture brand accent
@@ -43,6 +62,14 @@ function Accent({ children, className }: { children: React.ReactNode; className?
 
 function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
+}
+
+function humanizeToken(value: string): string {
+  return value
+    .split(/[_\-.]/g)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function pluginPagePath(companyPrefix: string | null | undefined): string {
@@ -221,6 +248,227 @@ function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" 
 
 function compactTitle(frame: StoredAttentionFrame): string {
   return frame.title.trim().length > 0 ? frame.title : "Untitled frame";
+}
+
+function approvalTitle(record: ApprovalRecord): string {
+  const payload = record.payload ?? {};
+  const explicitTitle = typeof payload.title === "string"
+    ? payload.title
+    : typeof payload.plan === "string"
+      ? payload.plan
+      : typeof payload.name === "string"
+        ? payload.name
+        : null;
+
+  if (explicitTitle) return explicitTitle;
+  return `${humanizeToken(record.type)} approval`;
+}
+
+function isBudgetOverrideRecord(record: ApprovalRecord): boolean {
+  return record.type === "budget_override_required";
+}
+
+function actionableApprovalRecords(records: ApprovalRecord[] | null): ApprovalRecord[] {
+  if (!records) return [];
+  return records
+    .filter((record) => record.status === "pending" || record.status === "revision_requested")
+    .sort((left, right) => {
+      const leftScore = isBudgetOverrideRecord(left) ? 1 : 0;
+      const rightScore = isBudgetOverrideRecord(right) ? 1 : 0;
+      if (leftScore !== rightScore) return rightScore - leftScore;
+      return (right.updatedAt ?? right.createdAt).localeCompare(left.updatedAt ?? left.createdAt);
+    });
+}
+
+function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFrame {
+  const payload = record.payload ?? {};
+  const budgetOverride = isBudgetOverrideRecord(record);
+  const requestedAmount = typeof payload.requestedAmount === "string" ? payload.requestedAmount : undefined;
+  const reason = typeof payload.reason === "string" ? payload.reason : undefined;
+  const decisionContext = typeof payload.decisionContext === "string" ? payload.decisionContext : undefined;
+  const summary = typeof payload.summary === "string"
+    ? payload.summary
+    : budgetOverride
+      ? "Budget controls are blocking work until a board decision lands."
+      : "A board decision is blocking work in Paperclip.";
+  const updatedAt = record.updatedAt ?? record.createdAt;
+
+  return {
+    id: `approval-bootstrap:${record.id}`,
+    taskId: `approval:${record.id}`,
+    interactionId: `approval:${record.id}:approval`,
+    source: {
+      id: "paperclip:approval",
+      kind: "paperclip",
+      label: "Paperclip approval",
+    },
+    version: 1,
+    mode: "approval",
+    tone: "focused",
+    consequence: budgetOverride ? "high" : "medium",
+    title: approvalTitle(record),
+    summary,
+    context: {
+      items: [
+        {
+          id: "approval-type",
+          label: "Type",
+          value: humanizeToken(record.type),
+        },
+        ...(requestedAmount ? [{
+          id: "requested-amount",
+          label: "Requested amount",
+          value: requestedAmount,
+        }] : []),
+        ...(reason ? [{
+          id: "budget-reason",
+          label: "Reason",
+          value: reason,
+        }] : []),
+        ...(decisionContext ? [{
+          id: "decision-context",
+          label: "Decision context",
+          value: decisionContext,
+        }] : []),
+      ],
+    },
+    responseSpec: {
+      kind: "approval",
+      actions: [
+        { id: "approve", label: "Approve", kind: "approve", emphasis: "primary" },
+        { id: "reject", label: "Reject", kind: "reject", emphasis: "danger" },
+        ...(budgetOverride
+          ? [{ id: "request-revision", label: "Request revision", kind: "cancel" as const, emphasis: "secondary" as const }]
+          : []),
+      ],
+    },
+    provenance: {
+      whyNow: budgetOverride
+        ? "Budget controls are blocking work until a board decision lands."
+        : "Paperclip is waiting on a human approval before work can continue.",
+      factors: budgetOverride
+        ? ["budget stop", "approval", "operator decision"]
+        : ["approval", "operator decision"],
+    },
+    timing: {
+      createdAt: record.createdAt,
+      updatedAt,
+    },
+    metadata: {
+      approvalStatus: record.status,
+      approvalType: record.type,
+    },
+  };
+}
+
+function frameSortScore(frame: StoredAttentionFrame, lane: FrameLane): number {
+  const toneWeight = frame.tone === "critical" ? 40 : frame.tone === "focused" ? 25 : 5;
+  const consequenceWeight = frame.consequence === "high" ? 30 : frame.consequence === "medium" ? 15 : 0;
+  const modeWeight = frame.mode === "approval" ? 12 : frame.mode === "choice" ? 8 : 0;
+  const laneWeight = lane === "active" ? 20 : lane === "queued" ? 10 : 0;
+  const budgetWeight = isBudgetOverride(frame) ? 10 : 0;
+  return toneWeight + consequenceWeight + modeWeight + laneWeight + budgetWeight;
+}
+
+function mergeSnapshotWithApprovals(
+  snapshot: AttentionSnapshot | null,
+  companyId: string,
+  approvals: ApprovalRecord[] | null,
+): AttentionSnapshot {
+  const base = snapshot ?? createEmptySnapshot(companyId);
+  const approvalFrames = actionableApprovalRecords(approvals).map(approvalRecordToFrame);
+  if (approvalFrames.length === 0) return base;
+
+  const approvalIds = new Set(approvalFrames.map((frame) => approvalIdForFrame(frame)).filter((value): value is string => !!value));
+  const isNonPendingWorkerApproval = (frame: StoredAttentionFrame) => {
+    const approvalId = approvalIdForFrame(frame);
+    return approvalId ? !approvalIds.has(approvalId) : false;
+  };
+  const baseNonApprovalActive = base.active && !approvalIdForFrame(base.active) ? base.active : null;
+  const baseNonApprovalQueued = base.queued.filter((frame) => !approvalIdForFrame(frame));
+  const baseAmbient = base.ambient.filter((frame) => !isNonPendingWorkerApproval(frame));
+  const candidates: Array<{ frame: StoredAttentionFrame; lane: FrameLane }> = [
+    ...(baseNonApprovalActive ? [{ frame: baseNonApprovalActive, lane: "active" as const }] : []),
+    ...baseNonApprovalQueued.map((frame) => ({ frame, lane: "queued" as const })),
+    ...approvalFrames.map((frame, index) => ({ frame, lane: index === 0 ? "active" as const : "queued" as const })),
+  ].sort((left, right) => {
+    const byScore = frameSortScore(right.frame, right.lane) - frameSortScore(left.frame, left.lane);
+    if (byScore !== 0) return byScore;
+    return frameUpdatedAt(right.frame, base.updatedAt).localeCompare(frameUpdatedAt(left.frame, base.updatedAt));
+  });
+
+  const active = candidates[0]?.frame ?? null;
+  const queued = candidates.slice(1).map((entry) => entry.frame);
+
+  return {
+    ...base,
+    active,
+    queued,
+    ambient: baseAmbient,
+    counts: {
+      active: active ? 1 : 0,
+      queued: queued.length,
+      ambient: baseAmbient.length,
+      total: (active ? 1 : 0) + queued.length + baseAmbient.length,
+    },
+  };
+}
+
+function usePendingApprovals(companyId: string | null | undefined): ApprovalQueryResult {
+  const [data, setData] = useState<ApprovalRecord[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+
+  useEffect(() => {
+    if (!companyId) {
+      setData(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadApprovals() {
+      try {
+        setError(null);
+        const response = await window.fetch(`/api/companies/${companyId}/approvals?status=pending`, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to load approvals (${response.status})`);
+        }
+        const approvals = await response.json() as ApprovalRecord[];
+        if (!cancelled) {
+          setData(approvals);
+          setLoading(false);
+        }
+      } catch (fetchError) {
+        if (!cancelled) {
+          setError(fetchError instanceof Error ? fetchError : new Error(String(fetchError)));
+          setLoading(false);
+        }
+      }
+    }
+
+    setLoading(true);
+    void loadApprovals();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, refreshVersion]);
+
+  return {
+    data,
+    loading,
+    error,
+    refresh: () => {
+      setRefreshVersion((value) => value + 1);
+    },
+  };
 }
 
 // Highlight entity-like tokens in the title (agent names, identifiers like CAM-9)
@@ -853,8 +1101,15 @@ function AmbientLane(props: {
 export function DashboardWidget(props: PluginWidgetProps) {
   const companyId = props.context.companyId;
   const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
-  useAttentionPolling(companyId, [summaryQuery.refresh]);
-  const { data, loading, error } = summaryQuery;
+  const approvalsQuery = usePendingApprovals(companyId);
+  useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
+  const merged = useMemo(
+    () => companyId ? mergeSnapshotWithApprovals(summaryQuery.data, companyId, approvalsQuery.data) : null,
+    [summaryQuery.data, approvalsQuery.data, companyId],
+  );
+  const loading = summaryQuery.loading || approvalsQuery.loading;
+  const error = summaryQuery.error ?? approvalsQuery.error;
+  const data = merged;
 
   if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Open a company to see Aperture attention.</div>;
   if (loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Loading Aperture{"\u2026"}</div>;
@@ -891,8 +1146,13 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
   const href = pluginPagePath(context.companyPrefix);
   const isActive = typeof window !== "undefined" && window.location.pathname === href;
   const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
-  useAttentionPolling(companyId, [summaryQuery.refresh]);
-  const actionable = summaryQuery.data ? actionableCount(summaryQuery.data) : 0;
+  const approvalsQuery = usePendingApprovals(companyId);
+  useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
+  const merged = useMemo(
+    () => companyId ? mergeSnapshotWithApprovals(summaryQuery.data, companyId, approvalsQuery.data) : null,
+    [summaryQuery.data, approvalsQuery.data, companyId],
+  );
+  const actionable = merged ? actionableCount(merged) : 0;
 
   return (
     <a
@@ -941,8 +1201,15 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
 export function AttentionPage(props: PluginPageProps) {
   const companyId = props.context.companyId;
   const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
-  useAttentionPolling(companyId, [summaryQuery.refresh]);
-  const { data: snapshot, loading, error, refresh } = summaryQuery;
+  const approvalsQuery = usePendingApprovals(companyId);
+  useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
+  const snapshot = useMemo(
+    () => companyId ? mergeSnapshotWithApprovals(summaryQuery.data, companyId, approvalsQuery.data) : null,
+    [summaryQuery.data, approvalsQuery.data, companyId],
+  );
+  const loading = summaryQuery.loading || approvalsQuery.loading;
+  const error = summaryQuery.error ?? approvalsQuery.error;
+  const refresh = summaryQuery.refresh;
   const acknowledge = usePluginAction("acknowledge-frame");
   const dismiss = usePluginAction("dismiss-frame");
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -972,7 +1239,9 @@ export function AttentionPage(props: PluginPageProps) {
 
   function nudgeRefresh() {
     refresh();
+    approvalsQuery.refresh();
     window.setTimeout(() => refresh(), 500);
+    window.setTimeout(() => approvalsQuery.refresh(), 500);
   }
 
   async function acknowledgeFrame(frame: StoredAttentionFrame) {
@@ -1010,16 +1279,17 @@ export function AttentionPage(props: PluginPageProps) {
 
     setPendingId(frame.id);
     try {
-      const response = await window.fetch(`/api/approvals/${approvalId}/${decision}`, {
+      const actionPath = decision === "approve" ? "approve" : "reject";
+      const response = await window.fetch(`/api/approvals/${approvalId}/${actionPath}`, {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({}),
       });
-
       if (!response.ok) {
-        throw new Error(`Approval ${decision} failed (${response.status}).`);
+        throw new Error(`Approval ${actionPath} failed (${response.status}).`);
       }
 
       setStatusOverride(`${decision === "approve" ? "Approved" : "Rejected"} ${compactTitle(frame)}.`);
@@ -1042,14 +1312,14 @@ export function AttentionPage(props: PluginPageProps) {
     try {
       const response = await window.fetch(`/api/approvals/${approvalId}/request-revision`, {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({}),
       });
-
       if (!response.ok) {
-        throw new Error(`Revision request failed (${response.status}).`);
+        throw new Error(`Approval request-revision failed (${response.status}).`);
       }
 
       setStatusOverride(`Requested revision for ${compactTitle(frame)}.`);

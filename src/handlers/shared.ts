@@ -1,8 +1,10 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
-import type { AttentionSnapshot } from "../aperture/types.js";
+import type { AttentionLedger, AttentionSnapshot } from "../aperture/types.js";
 
 export const ATTENTION_SNAPSHOT_STATE_KEY = "attention-snapshot";
+export const ATTENTION_LEDGER_STATE_KEY = "attention-ledger";
 export const ATTENTION_UPDATES_STREAM = "attention-updates";
+export const MAX_LEDGER_ENTRIES = 250;
 
 export type AttentionUpdateEvent = {
   companyId: string;
@@ -32,6 +34,17 @@ export async function persistSnapshot(
   await ctx.state.set(
     { scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_SNAPSHOT_STATE_KEY },
     snapshot,
+  );
+}
+
+export async function persistLedger(
+  ctx: PluginContext,
+  companyId: string,
+  ledger: AttentionLedger,
+): Promise<void> {
+  await ctx.state.set(
+    { scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_LEDGER_STATE_KEY },
+    ledger.slice(-MAX_LEDGER_ENTRIES),
   );
 }
 

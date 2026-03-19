@@ -4,15 +4,21 @@ import {
   type AttentionFrame,
   type AttentionResponse,
 } from "@tomismeta/aperture-core";
-import { createAttentionSnapshot, type AttentionSnapshot } from "./types.js";
+import {
+  createAttentionSnapshot,
+  createEmptyLedger,
+  type AttentionLedger,
+  type AttentionLedgerEntry,
+  type AttentionSnapshot,
+  type SnapshotSource,
+} from "./types.js";
 
 type CompanySession = {
   core: ApertureCore;
   snapshot: AttentionSnapshot | null;
+  ledger: AttentionLedger;
   eventCount: number;
 };
-
-type SnapshotSource = AttentionSnapshot["lastEvent"];
 
 export class ApertureCompanyStore {
   private readonly sessions = new Map<string, CompanySession>();
@@ -39,10 +45,46 @@ export class ApertureCompanyStore {
     return this.sessions.get(companyId)?.snapshot ?? null;
   }
 
-  hydrateSnapshot(companyId: string, snapshot: AttentionSnapshot): AttentionSnapshot {
+  getLedger(companyId: string): AttentionLedger {
+    return [...(this.sessions.get(companyId)?.ledger ?? [])];
+  }
+
+  appendLedgerEntry(companyId: string, entry: AttentionLedgerEntry): AttentionLedger {
     const session = this.ensureSession(companyId);
-    session.snapshot = snapshot;
-    return snapshot;
+    session.ledger = [...session.ledger, entry];
+    return this.getLedger(companyId);
+  }
+
+  replaceLedger(companyId: string, ledger: AttentionLedger): AttentionLedger {
+    const session = this.ensureSession(companyId);
+    session.ledger = [...ledger];
+    return this.getLedger(companyId);
+  }
+
+  rebuildFromLedger(companyId: string, ledger: AttentionLedger): AttentionSnapshot {
+    const session: CompanySession = {
+      core: new ApertureCore(),
+      snapshot: null,
+      ledger: [...ledger],
+      eventCount: 0,
+    };
+
+    let lastSource: SnapshotSource | undefined;
+    let lastOccurredAt: string | undefined;
+    for (const entry of ledger) {
+      lastSource = entry.source;
+      lastOccurredAt = entry.occurredAt;
+      if (entry.kind === "event") {
+        session.core.publish(entry.apertureEvent);
+        session.eventCount += 1;
+      } else {
+        session.core.submit(entry.apertureResponse);
+      }
+    }
+
+    session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), lastSource, lastOccurredAt);
+    this.sessions.set(companyId, session);
+    return session.snapshot;
   }
 
   getCompanyCount(): number {
@@ -56,6 +98,7 @@ export class ApertureCompanyStore {
     session = {
       core: new ApertureCore(),
       snapshot: null,
+      ledger: createEmptyLedger(),
       eventCount: 0,
     };
     this.sessions.set(companyId, session);

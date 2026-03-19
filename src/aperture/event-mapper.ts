@@ -8,6 +8,10 @@ type ExtendedPluginEventType =
   | "approval.revision_requested"
   | "issue.comment_added";
 
+type MappablePluginEvent = Omit<PluginEvent, "eventType"> & {
+  eventType: ExtendedPluginEventType;
+};
+
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
@@ -35,13 +39,13 @@ function humanizeApprovalType(value: string | undefined): string | undefined {
   return value ? humanizeToken(value) : undefined;
 }
 
-function makeTaskId(event: PluginEvent): string {
+function makeTaskId(event: MappablePluginEvent): string {
   const entityType = event.entityType ?? "event";
   const entityId = event.entityId ?? event.eventId;
   return `${entityType}:${entityId}`;
 }
 
-function makeSource(event: PluginEvent): SourceRef {
+function makeSource(event: MappablePluginEvent): SourceRef {
   const entityType = event.entityType ?? "event";
 
   switch (entityType) {
@@ -111,7 +115,7 @@ function inferAgentStatus(payload: unknown): TaskStatus {
   return "running";
 }
 
-function approvalTitle(event: PluginEvent): string {
+function approvalTitle(event: MappablePluginEvent): string {
   const explicitTitle =
     readPayloadString(event.payload, "title")
     ?? readPayloadString(event.payload, "plan")
@@ -122,15 +126,15 @@ function approvalTitle(event: PluginEvent): string {
   return approvalType ? `${approvalType} approval` : "Approval requested";
 }
 
-function approvalType(event: PluginEvent): string | undefined {
+function approvalType(event: MappablePluginEvent): string | undefined {
   return readPayloadString(event.payload, "type");
 }
 
-function isBudgetOverrideApproval(event: PluginEvent): boolean {
+function isBudgetOverrideApproval(event: MappablePluginEvent): boolean {
   return approvalType(event) === "budget_override_required";
 }
 
-function issueDisplayTitle(event: PluginEvent, fallback: string): string {
+function issueDisplayTitle(event: MappablePluginEvent, fallback: string): string {
   const identifier = readPayloadString(event.payload, "identifier");
   const issueTitle = readPayloadString(event.payload, "issueTitle") ?? readPayloadString(event.payload, "title");
 
@@ -140,8 +144,8 @@ function issueDisplayTitle(event: PluginEvent, fallback: string): string {
   return fallback;
 }
 
-export function mapPluginEventToAperture(event: PluginEvent): ApertureEvent | null {
-  const eventType = event.eventType as ExtendedPluginEventType;
+export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEvent | null {
+  const eventType = event.eventType;
   const taskId = makeTaskId(event);
   const source = makeSource(event);
 

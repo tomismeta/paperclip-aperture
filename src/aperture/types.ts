@@ -1,4 +1,4 @@
-import type { AttentionFrame, AttentionView } from "@tomismeta/aperture-core";
+import type { ApertureEvent, AttentionFrame, AttentionResponse, AttentionView } from "@tomismeta/aperture-core";
 
 export type StoredAttentionFrame = Pick<
   AttentionFrame,
@@ -38,6 +38,27 @@ export type AttentionSnapshot = {
   };
 };
 
+export type SnapshotSource = NonNullable<AttentionSnapshot["lastEvent"]>;
+
+export type AttentionLedgerEventEntry = {
+  kind: "event";
+  id: string;
+  occurredAt: string;
+  source: SnapshotSource;
+  apertureEvent: ApertureEvent;
+};
+
+export type AttentionLedgerResponseEntry = {
+  kind: "response";
+  id: string;
+  occurredAt: string;
+  source: SnapshotSource;
+  apertureResponse: AttentionResponse;
+};
+
+export type AttentionLedgerEntry = AttentionLedgerEventEntry | AttentionLedgerResponseEntry;
+export type AttentionLedger = AttentionLedgerEntry[];
+
 export function toStoredFrame(frame: AttentionFrame | null): StoredAttentionFrame | null {
   if (!frame) return null;
 
@@ -76,10 +97,15 @@ export function createEmptySnapshot(companyId: string): AttentionSnapshot {
   };
 }
 
+export function createEmptyLedger(): AttentionLedger {
+  return [];
+}
+
 export function createAttentionSnapshot(
   companyId: string,
   view: AttentionView,
   lastEvent?: AttentionSnapshot["lastEvent"],
+  updatedAt?: string,
 ): AttentionSnapshot {
   const active = toStoredFrame(view.active);
   const queued = view.queued.map((frame) => toStoredFrame(frame)).filter((frame): frame is StoredAttentionFrame => frame !== null);
@@ -87,7 +113,7 @@ export function createAttentionSnapshot(
 
   return {
     companyId,
-    updatedAt: new Date().toISOString(),
+    updatedAt: updatedAt ?? new Date().toISOString(),
     active,
     queued,
     ambient,
