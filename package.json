@@ -47,9 +47,7 @@
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "2026.318.0",
-    "@tomismeta/aperture-core": "^0.2.2",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@tomismeta/aperture-core": "^0.2.2"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^16.0.1",
@@ -59,6 +57,8 @@
     "@types/react-dom": "^19.0.3",
     "esbuild": "^0.27.3",
     "playwright": "^1.58.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "rollup": "^4.38.0",
     "tslib": "^2.8.1",
     "tsx": "^4.20.5",
