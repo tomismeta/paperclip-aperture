@@ -1,14 +1,30 @@
+<div align="center">
+
 # Paperclip Aperture
 
-**An Aperture-powered attention surface for Paperclip.**
+**A Paperclip plugin powered by Aperture's deterministic attention and judgment engine.**
 
-![Paperclip Aperture screenshot](./docs/assets/paperclip-aperture.png)
+[![github](https://img.shields.io/badge/github-tomismeta%2Fpaperclip--aperture-18181b)](https://github.com/tomismeta/paperclip-aperture)
+[![npm aperture core](https://img.shields.io/npm/v/%40tomismeta%2Faperture-core?label=aperture%20core&color=0f766e)](https://www.npmjs.com/package/@tomismeta/aperture-core)
+[![paperclip](https://img.shields.io/badge/host-paperclip-2563eb)](https://github.com/paperclipai/paperclip)
 
-`paperclip-aperture` is a Paperclip plugin that treats Paperclip as the host runtime and UI shell, while importing [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core) as the judgment engine.
+<img src="docs/assets/paperclip-aperture.png" alt="Paperclip Aperture screenshot" width="1400">
+<p></p>
+</div>
 
-It turns Paperclip approvals, issue activity, and other operator-facing events into an Aperture-style attention view:
 
-`Paperclip events -> plugin mapper -> Aperture judgment -> Paperclip UI`
+Paperclip Aperture treats Paperclip as the host runtime and UI shell, while importing [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core) as the judgment engine.
+
+It turns Paperclip approvals, issue activity, and other operator-facing events into an Aperture-style attention surface:
+
+```text
++------------------+     +-------------------+     +-------------------+     +------------------+     +------------------+
+| Paperclip events | --> | Plugin translates | --> | Aperture judges   | --> | Paperclip renders| --> | Human responds   |
+| approvals        |     | explicit facts    |     | now / next /      |     | attention UI     |     | into host action |
+| issues           |     | from host payloads|     | ambient           |     | + operator tools |     | approve / reject |
+| run failures     |     |                   |     |                   |     |                  |     | acknowledge      |
++------------------+     +-------------------+     +-------------------+     +------------------+     +------------------+
+```
 
 Links:
 
@@ -16,9 +32,58 @@ Links:
 - Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
 - Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
 
-## What This Plugin Is
+## Start Here
 
-This repo is intentionally separate from the Paperclip monorepo.
+Choose one path:
+
+- **install the plugin locally** if you want to run it in Paperclip today
+- **read the architecture** if you want to understand how Aperture is embedded inside the plugin
+
+### Install The Plugin Locally
+
+This plugin is not yet published to npm.
+
+Today, the supported path is a local-path plugin install into a Paperclip instance:
+
+```bash
+git clone git@github.com:tomismeta/paperclip-aperture.git
+cd paperclip-aperture
+pnpm install
+pnpm build
+```
+
+Then, from a Paperclip checkout with a running local instance:
+
+```bash
+cd /path/to/paperclip
+
+PAPERCLIP_HOME=/path/to/paperclip-sandbox \
+PAPERCLIP_INSTANCE_ID=aperture-dev \
+pnpm paperclipai run
+```
+
+In another terminal, install the plugin by local path:
+
+```bash
+cd /path/to/paperclip
+
+PAPERCLIP_HOME=/path/to/paperclip-sandbox \
+PAPERCLIP_INSTANCE_ID=aperture-dev \
+pnpm paperclipai plugin install /absolute/path/to/paperclip-aperture
+```
+
+Then open Paperclip and navigate to:
+
+- `Settings -> Plugins -> Paperclip Aperture`
+- `/<company-prefix>/aperture`
+
+Future install shape once this plugin is published:
+
+```bash
+pnpm paperclipai plugin install @tomismeta/paperclip-aperture
+```
+
+### Understand The Embedding Model
 
 The architecture is host-first:
 
@@ -27,6 +92,62 @@ The architecture is host-first:
 - plugin artifact: `@tomismeta/paperclip-aperture`
 
 The goal is to prove that Aperture can live inside Paperclip as a normal plugin, without changing Aperture core.
+
+## What This Plugin Is
+
+Paperclip Aperture is an alternative operator attention surface for Paperclip.
+
+It takes Paperclip-native events such as:
+
+- approvals
+- budget override requests
+- issue lifecycle changes
+- issue comments
+- run failures
+
+and feeds them into Aperture's deterministic judgment loop so one operator can see:
+
+- what deserves attention **now**
+- what should wait until **next**
+- what should remain **ambient**
+
+## Why It Exists
+
+Paperclip already has the host pieces:
+
+- agent workflows
+- approvals
+- operator UI surfaces
+- plugin lifecycle and event subscriptions
+
+Aperture already has the judgment piece:
+
+- deciding what deserves attention now
+- what should wait until next
+- what should stay ambient
+
+This plugin is the bridge between those two systems.
+
+## Guardrails
+
+This plugin stays inside Paperclip's current plugin model and core governance boundaries.
+
+What it does not do:
+
+- it does **not** change Aperture core
+- it does **not** override Paperclip approval, auth, issue, or budget invariants
+- it does **not** patch Paperclip core routes or host business logic
+
+What it does do:
+
+- subscribes to Paperclip host events through the plugin runtime
+- stores plugin state inside Paperclip's plugin state APIs
+- renders UI through Paperclip plugin slots
+- sends approval decisions back through Paperclip's existing approval APIs from the trusted same-origin plugin UI
+
+Important current runtime caveat:
+
+- Paperclip plugin UI currently runs as trusted same-origin code, so UI-triggered HTTP calls are part of the host's current plugin trust model, not a new capability bypass invented by this plugin
 
 ## Current Product Shape
 
@@ -74,41 +195,6 @@ pnpm test
 This repo currently snapshots `@paperclipai/plugin-sdk` and `@paperclipai/shared` from a local Paperclip checkout into `.paperclip-sdk/` for development.
 
 Before publishing this plugin package itself, those should be switched to published Paperclip package versions when available.
-
-## Install Into Paperclip
-
-Build the plugin:
-
-```bash
-cd /path/to/paperclip-aperture
-pnpm install
-pnpm build
-```
-
-Then install it into a local Paperclip instance by path:
-
-```bash
-curl -X POST http://127.0.0.1:3100/api/plugins/install \
-  -H "Content-Type: application/json" \
-  -d '{"packageName":"/absolute/path/to/paperclip-aperture","isLocalPath":true}'
-```
-
-## Why This Exists
-
-Paperclip already has the host pieces:
-
-- agent workflows
-- approvals
-- operator UI surfaces
-- plugin lifecycle and event subscriptions
-
-Aperture already has the judgment piece:
-
-- deciding what deserves attention now
-- what should wait until next
-- what should stay ambient
-
-This plugin is the bridge between those two systems.
 
 ## Status
 
