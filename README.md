@@ -12,13 +12,6 @@
 <p></p>
 </div>
 
-Short assets:
-
-- GitHub demo GIF: [docs/assets/focus-demo.gif](./docs/assets/focus-demo.gif)
-- Twitter/MP4 demo: [docs/assets/focus-demo.mp4](./docs/assets/focus-demo.mp4)
-- Poster frame: [docs/assets/focus-demo-poster.png](./docs/assets/focus-demo-poster.png)
-- Live walkthrough guide: [docs/DEMO.md](./docs/DEMO.md)
-
 
 Paperclip Aperture treats Paperclip as the host runtime and UI shell, while importing [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) via the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
