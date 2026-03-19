@@ -78,6 +78,7 @@ pnpm release:check
 ## Links
 
 - Plugin on npm: [`@tomismeta/paperclip-aperture`](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
+- Roadmap and releasing: [docs/ROADMAP.md](./docs/ROADMAP.md)
 - Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
 - Aperture Core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
 - Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
