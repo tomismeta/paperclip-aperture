@@ -14,12 +14,6 @@ importers:
       '@tomismeta/aperture-core':
         specifier: ^0.2.2
         version: 0.2.2
-      react:
-        specifier: ^19.0.0
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.0.0
-        version: 19.2.4(react@19.2.4)
     devDependencies:
       '@rollup/plugin-node-resolve':
         specifier: ^16.0.1
@@ -42,6 +36,12 @@ importers:
       playwright:
         specifier: ^1.58.2
         version: 1.58.2
+      react:
+        specifier: ^19.0.0
+        version: 19.2.4
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.4(react@19.2.4)
       rollup:
         specifier: ^4.38.0
         version: 4.59.0
