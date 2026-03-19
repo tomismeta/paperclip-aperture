@@ -36,6 +36,14 @@ type ApprovalQueryResult = {
   error: Error | null;
   refresh: () => void;
 };
+type SurfaceLabel = "focus";
+type SurfaceBrand = {
+  key: SurfaceLabel;
+  wordmark: string;
+  supportCopy: string;
+  headingEmptyState: string;
+  loadingLabel: string;
+};
 
 // Aperture brand accent
 // Uses inline styles because the host Tailwind JIT won't scan plugin bundles
@@ -43,6 +51,16 @@ type ApprovalQueryResult = {
 const ACCENT_COLOR = "#19A1FF";
 const ACCENT_STYLE: React.CSSProperties = { color: ACCENT_COLOR };
 const ACCENT_BG_STYLE: React.CSSProperties = { backgroundColor: ACCENT_COLOR };
+
+function currentSurfaceBrand(): SurfaceBrand {
+  return {
+    key: "focus",
+    wordmark: "Focus",
+    supportCopy: "Powered by Aperture",
+    headingEmptyState: "No focus state yet.",
+    loadingLabel: "Loading Focus…",
+  };
+}
 
 /**
  * Forces accent color with !important to override any host Tailwind rules.
@@ -746,6 +764,7 @@ function QuietNow() {
 function NowPane(props: {
   snapshot: AttentionSnapshot;
   posture: Posture;
+  brand: SurfaceBrand;
   companyPrefix: string | null | undefined;
   counts: AttentionSnapshot["counts"];
   pendingId: string | null;
@@ -766,11 +785,16 @@ function NowPane(props: {
 
   return (
     <section className="border border-border bg-card shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-accent px-4 py-4 sm:px-6">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-3 border-b border-border bg-accent px-4 py-2.5 sm:px-6">
+        <div className="flex items-center gap-3">
           <Accent className="text-base leading-none">{props.posture.glyph}</Accent>
-          <Accent className="text-[18px] leading-none font-bold uppercase tracking-[0.18em]">Aperture</Accent>
-          <Accent className="text-sm leading-none">{props.posture.label}</Accent>
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-end gap-2">
+              <Accent className="text-[18px] leading-none font-bold tracking-[0.04em]">{props.brand.wordmark}</Accent>
+              <Accent className="text-xs leading-none">{props.posture.label}</Accent>
+            </div>
+            <div className="text-[10px] leading-none text-muted-foreground/60">{props.brand.supportCopy}</div>
+          </div>
         </div>
         <div className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
           <span className={props.counts.active > 0 ? "font-semibold" : ""}>
@@ -1100,6 +1124,7 @@ function AmbientLane(props: {
 
 export function DashboardWidget(props: PluginWidgetProps) {
   const companyId = props.context.companyId;
+  const brand = currentSurfaceBrand();
   const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
   const approvalsQuery = usePendingApprovals(companyId);
   useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
@@ -1111,19 +1136,24 @@ export function DashboardWidget(props: PluginWidgetProps) {
   const error = summaryQuery.error ?? approvalsQuery.error;
   const data = merged;
 
-  if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Open a company to see Aperture attention.</div>;
-  if (loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Loading Aperture{"\u2026"}</div>;
+  if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Open a company to see {brand.wordmark}.</div>;
+  if (loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">{brand.loadingLabel}</div>;
   if (error) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Plugin error: {error.message}</div>;
-  if (!data) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">No attention state yet.</div>;
+  if (!data) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">{brand.headingEmptyState}</div>;
 
   const posture = postureForSnapshot(data);
 
   return (
-    <div className="border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-xs">
-        <Accent className="text-sm">{posture.glyph}</Accent>
-        <Accent className="font-semibold uppercase tracking-wider">Aperture</Accent>
-        <Accent>{posture.label}</Accent>
+    <div className="border border-border bg-card px-4 py-2.5 shadow-sm">
+      <div className="flex items-start gap-2 text-xs">
+        <Accent className="pt-0.5 text-sm">{posture.glyph}</Accent>
+        <div className="min-w-0">
+          <div className="flex items-end gap-2">
+            <Accent className="font-semibold tracking-[0.04em]">{brand.wordmark}</Accent>
+            <Accent className="text-[11px]">{posture.label}</Accent>
+          </div>
+          <div className="mt-0.5 text-[10px] leading-none text-muted-foreground/60">{brand.supportCopy}</div>
+        </div>
         <span className="ml-auto tabular-nums text-muted-foreground">
           now {data.counts.active} · next {data.counts.queued} · ambient {data.counts.ambient}
         </span>
@@ -1143,6 +1173,7 @@ export function DashboardWidget(props: PluginWidgetProps) {
 
 export function AttentionSidebarLink({ context }: PluginSidebarProps) {
   const companyId = context.companyId;
+  const brand = currentSurfaceBrand();
   const href = pluginPagePath(context.companyPrefix);
   const isActive = typeof window !== "undefined" && window.location.pathname === href;
   const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
@@ -1184,7 +1215,7 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
           <path d="m16.6 12-5.2 9" />
         </svg>
       </span>
-      <span className="flex-1 truncate">Aperture</span>
+      <span className="flex-1 truncate">{brand.wordmark}</span>
       {actionable > 0 ? (
         <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
           {actionable}
@@ -1200,6 +1231,7 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
 
 export function AttentionPage(props: PluginPageProps) {
   const companyId = props.context.companyId;
+  const brand = currentSurfaceBrand();
   const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
   const approvalsQuery = usePendingApprovals(companyId);
   useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
@@ -1331,16 +1363,17 @@ export function AttentionPage(props: PluginPageProps) {
     }
   }
 
-  if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Select a company to open Aperture.</div>;
+  if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Select a company to open {brand.wordmark}.</div>;
   if (!snapshot && loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Loading attention center{"\u2026"}</div>;
   if (!snapshot && error) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Plugin error: {error.message}</div>;
-  if (!snapshot || !posture) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">No attention state has been captured for this company yet.</div>;
+  if (!snapshot || !posture) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">No {brand.key === "focus" ? "focus" : "attention"} state has been captured for this company yet.</div>;
 
   return (
     <div className="space-y-5">
       <NowPane
         snapshot={snapshot}
         posture={posture}
+        brand={brand}
         companyPrefix={props.context.companyPrefix}
         counts={snapshot.counts}
         pendingId={pendingId}

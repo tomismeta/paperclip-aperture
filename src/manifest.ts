@@ -43,20 +43,20 @@ const manifest: PaperclipPluginManifestV1 = {
       {
         type: "page",
         id: "attention-page",
-        displayName: "Aperture",
+        displayName: "Focus",
         exportName: "AttentionPage",
         routePath: "aperture"
       },
       {
         type: "sidebar",
         id: "attention-sidebar-link",
-        displayName: "Aperture",
+        displayName: "Focus",
         exportName: "AttentionSidebarLink"
       },
       {
         type: "dashboardWidget",
         id: "attention-widget",
-        displayName: "Paperclip Aperture",
+        displayName: "Focus",
         exportName: "DashboardWidget"
       }
     ]
