@@ -20,8 +20,6 @@ Paperclip Aperture adds a Focus surface to Paperclip that deterministically rank
 paperclipai plugin install @tomismeta/paperclip-aperture
 ```
 
-That is the intended consumer install path once the package is published.
-
 If you need Paperclip first:
 
 ```bash
@@ -31,7 +29,7 @@ paperclipai run
 
 Then install the plugin with the command above.
 
-If you are testing from source before npm publish:
+If you are testing from source:
 
 ```bash
 git clone git@github.com:tomismeta/paperclip-aperture.git
@@ -92,7 +90,7 @@ pnpm test
 pnpm build
 ```
 
-Before publishing, run:
+Before releasing, run:
 
 ```bash
 pnpm release:check
