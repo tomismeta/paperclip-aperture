@@ -14,7 +14,8 @@ const GIF_PATH = join(OUTPUT_DIR, "focus-demo.gif");
 const POSTER_PATH = join(OUTPUT_DIR, "focus-demo-poster.png");
 
 const CAPTURE_INTERVAL_MS = 500;
-const TOTAL_DURATION_MS = 24_000;
+const TOTAL_DURATION_MS = 50_000;
+const ACTION_DELAY_MS = 1_200;
 
 type Company = {
   id: string;
@@ -58,21 +59,38 @@ async function createCompany(name: string): Promise<Company> {
     method: "POST",
     body: JSON.stringify({
       name,
-      description: "Automated demo company for the Focus plugin walkthrough.",
+      description: "Automated demo company for the Paperclip Aperture live attention walkthrough.",
     }),
   });
 }
 
-async function createIssue(companyId: string): Promise<Issue> {
+async function listCompanies(): Promise<Company[]> {
+  return api<Company[]>("/api/companies");
+}
+
+async function deleteCompany(companyId: string): Promise<void> {
+  await api(`/api/companies/${companyId}`, { method: "DELETE" });
+}
+
+async function createIssue(
+  companyId: string,
+  input: {
+    title: string;
+    description: string;
+    status: string;
+    priority: string;
+  },
+): Promise<Issue> {
   return api<Issue>(`/api/companies/${companyId}/issues`, {
     method: "POST",
-    body: JSON.stringify({
-      title: "Investigate sandbox compute spike before launch sign-off",
-      description:
-        "Ops noticed sandbox compute costs jumping during the final staging run. The team needs a quick validation pass before approving launch spend.",
-      status: "backlog",
-      priority: "medium",
-    }),
+    body: JSON.stringify(input),
+  });
+}
+
+async function addIssueComment(issueId: string, body: string): Promise<void> {
+  await api(`/api/issues/${issueId}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
   });
 }
 
@@ -83,11 +101,11 @@ async function createBudgetApproval(companyId: string, issue: Issue): Promise<vo
       type: "budget_override_required",
       issueIds: [issue.id],
       payload: {
-        title: `Approve temporary budget override for ${issue.identifier}`,
-        summary: "Budget controls are blocking a short investigation into the sandbox compute spike.",
+        title: `Approve launch budget override for ${issue.identifier}`,
+        summary: "Budget controls are blocking the final launch validation pass.",
         requestedAmount: "$2,500",
-        reason: "Need 48 hours of additional sandbox runtime to rerun load tests and isolate the cost regression.",
-        decisionContext: `Allow a temporary override so the team can finish the launch readiness investigation for ${issue.identifier}.`,
+        reason: "Need a short override to finish the staging verification and budget mitigation plan.",
+        decisionContext: `Allow the team to finish launch readiness work tied to ${issue.identifier}.`,
       },
     }),
   });
@@ -100,11 +118,11 @@ async function createHireApproval(companyId: string, issue: Issue): Promise<void
       type: "hire_agent",
       issueIds: [issue.id],
       payload: {
-        title: `Hire FinOps Analyst for ${issue.identifier}`,
-        name: "FinOps Analyst",
+        title: `Hire Launch QA Agent for ${issue.identifier}`,
+        name: "Launch QA Agent",
         role: "operator",
         adapterType: "codex_local",
-        capabilities: "Investigate cost regressions, summarize findings, and coordinate launch budget mitigation.",
+        capabilities: "Validate launch readiness, summarize issues, and coordinate final QA follow-through.",
         budgetMonthlyCents: 120000,
       },
     }),
@@ -154,20 +172,63 @@ async function renderVideo(framesDir: string): Promise<void> {
 }
 
 async function approveNowItem(page: import("playwright").Page, expectedTitleFragment: string): Promise<void> {
-  await page.getByText(expectedTitleFragment, { exact: false }).waitFor({ state: "visible", timeout: 12_000 });
+  await page.getByText(expectedTitleFragment, { exact: false }).first().waitFor({ state: "visible", timeout: 12_000 });
   const approveButton = page.getByRole("button", { name: "Approve" }).first();
   await approveButton.waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(800);
   await approveButton.click();
+  await page.waitForTimeout(1_600);
+}
+
+async function postCommentOnNowItem(
+  page: import("playwright").Page,
+  expectedTitleFragment: string,
+  body: string,
+): Promise<void> {
+  await page.getByText(expectedTitleFragment, { exact: false }).first().waitFor({ state: "visible", timeout: 12_000 });
+  const commentButton = page.getByRole("button", { name: "Comment" }).first();
+  await commentButton.waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(800);
+  await commentButton.click();
+  const composer = page.getByPlaceholder("Add a short operator note back to the issue…");
+  await composer.waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(700);
+  await composer.click();
+  await composer.pressSequentially(body, { delay: 40 });
+  await page.waitForTimeout(1_000);
+  const postButton = page.getByRole("button", { name: "Post comment" }).first();
+  await postButton.waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(600);
+  await postButton.click();
+  await page.waitForTimeout(1_600);
+}
+
+async function acknowledgeNowItem(
+  page: import("playwright").Page,
+  expectedTitleFragment: string,
+): Promise<void> {
+  await page.getByText(expectedTitleFragment, { exact: false }).first().waitFor({ state: "visible", timeout: 12_000 });
+  const acknowledgeButton = page.getByRole("button", { name: "Acknowledge" }).first();
+  await acknowledgeButton.waitFor({ state: "visible", timeout: 5_000 });
+  await page.waitForTimeout(800);
+  await acknowledgeButton.click();
+  await page.waitForTimeout(1_600);
 }
 
 async function main(): Promise<void> {
   await mkdir(OUTPUT_DIR, { recursive: true });
   const framesDir = await mkdtemp(join(tmpdir(), "focus-demo-"));
-  let browserClosed = false;
 
   try {
+    const existingCompanies = await listCompanies();
+    const demoCompanies = existingCompanies.filter((company) => company.name.startsWith("Live Attention Demo "));
+    for (const demoCompany of demoCompanies) {
+      await deleteCompany(demoCompany.id);
+      console.log(`Deleted prior demo company ${demoCompany.issuePrefix}`);
+    }
+
     const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 12);
-    const company = await createCompany(`Northstar Robotics Demo ${stamp}`);
+    const company = await createCompany(`Live Attention Demo ${stamp}`);
     console.log(`Created company ${company.name} (${company.issuePrefix})`);
 
     const browser = await chromium.launch({ headless: true });
@@ -177,6 +238,22 @@ async function main(): Promise<void> {
       colorScheme: "dark",
     });
     const page = await context.newPage();
+    await page.route("**/api/plugins/**/actions/comment-on-issue", async (route) => {
+      await sleep(ACTION_DELAY_MS);
+      await route.continue();
+    });
+    await page.route("**/api/plugins/**/actions/acknowledge-frame", async (route) => {
+      await sleep(ACTION_DELAY_MS);
+      await route.continue();
+    });
+    await page.route("**/api/plugins/**/actions/record-approval-response", async (route) => {
+      await sleep(ACTION_DELAY_MS);
+      await route.continue();
+    });
+    await page.route("**/api/approvals/**/approve", async (route) => {
+      await sleep(ACTION_DELAY_MS);
+      await route.continue();
+    });
     await page.goto(`${BASE_URL}/${company.issuePrefix}/aperture`, { waitUntil: "networkidle" });
     await page.addStyleTag({
       content: `
@@ -189,36 +266,96 @@ async function main(): Promise<void> {
     });
     await page.waitForTimeout(1000);
 
-    let issue: Issue | null = null;
+    let resolvedIssue: Issue | null = null;
+    let reviewIssue: Issue | null = null;
+    let blockedIssue: Issue | null = null;
+
     const scheduledTasks = [
       (async () => {
         await sleep(1_500);
-        issue = await createIssue(company.id);
-        console.log(`Created ambient issue ${issue.identifier}`);
+        resolvedIssue = await createIssue(company.id, {
+          title: "Unblock onboarding workflow copy for launch",
+          description: "Launch is blocked on final onboarding copy direction.",
+          status: "blocked",
+          priority: "high",
+        });
+        const current = requireIssue(resolvedIssue, "Resolved issue missing");
+        await addIssueComment(
+          current.id,
+          [
+            "## CEO Confirmation — Onboarding Copy",
+            "",
+            "Here is the final direction. Lock these in.",
+            "",
+            "Use these. This is not a request for iteration.",
+            `Unblock [${current.identifier}](/${company.issuePrefix}/issues/${current.identifier}) and proceed to launch review.`,
+          ].join("\n"),
+        );
+        console.log(`Created resolved blocker ${current.identifier}`);
       })(),
       (async () => {
         await sleep(5_500);
-        const currentIssue = requireIssue(issue, "Issue not ready before budget approval");
-        await createBudgetApproval(company.id, currentIssue);
-        console.log(`Created budget approval for ${currentIssue.identifier}`);
+        reviewIssue = await createIssue(company.id, {
+          title: "Review pricing experiment memo",
+          description: "The board needs to review the latest memo before work proceeds.",
+          status: "in_review",
+          priority: "high",
+        });
+        const current = requireIssue(reviewIssue, "Review issue missing");
+        await addIssueComment(
+          current.id,
+          "I don't actually see the actual memo. Can you share it with the board?",
+        );
+        console.log(`Created review-required issue ${current.identifier}`);
       })(),
       (async () => {
-        await sleep(10_500);
-        const currentIssue = requireIssue(issue, "Issue not ready before hire approval");
-        await createHireApproval(company.id, currentIssue);
-        console.log(`Created hire approval for ${currentIssue.identifier}`);
+        await sleep(9_000);
+        const current = requireIssue(reviewIssue, "Review issue missing before approval");
+        await createBudgetApproval(company.id, current);
+        console.log(`Created budget approval for ${current.identifier}`);
       })(),
       (async () => {
-        await sleep(15_500);
-        const currentIssue = requireIssue(issue, "Issue not ready before first approval click");
-        await approveNowItem(page, `Approve temporary budget override for ${currentIssue.identifier}`);
-        console.log(`Approved budget override for ${currentIssue.identifier}`);
+        await sleep(12_500);
+        blockedIssue = await createIssue(company.id, {
+          title: "Confirm reference customers for testimonials",
+          description: "Marketing cannot finish the launch page until reference customers are confirmed.",
+          status: "blocked",
+          priority: "medium",
+        });
+        const current = requireIssue(blockedIssue, "Blocked issue missing");
+        await addIssueComment(
+          current.id,
+          "Blocked on final customer references. Need the exact logos and quotes before launch page copy can proceed.",
+        );
+        console.log(`Created blocked next item ${current.identifier}`);
       })(),
       (async () => {
-        await sleep(18_500);
-        const currentIssue = requireIssue(issue, "Issue not ready before second approval click");
-        await approveNowItem(page, `Hire FinOps Analyst for ${currentIssue.identifier}`);
-        console.log(`Approved hire request for ${currentIssue.identifier}`);
+        await sleep(16_000);
+        const current = requireIssue(reviewIssue, "Review issue missing before approval click");
+        await approveNowItem(page, `Approve launch budget override for ${current.identifier}`);
+        console.log(`Approved budget override for ${current.identifier}`);
+      })(),
+      (async () => {
+        await sleep(24_000);
+        const current = requireIssue(reviewIssue, "Review issue missing before comment");
+        await postCommentOnNowItem(
+          page,
+          current.identifier,
+          "Please attach or link the memo in this thread so the board can review it without leaving the issue.",
+        );
+        console.log(`Posted Focus comment on ${current.identifier}`);
+      })(),
+      (async () => {
+        await sleep(34_000);
+        const current = requireIssue(reviewIssue, "Review issue missing before acknowledge");
+        await acknowledgeNowItem(page, current.identifier);
+        console.log(`Acknowledged ${current.identifier} from Focus`);
+      })(),
+      (async () => {
+        await sleep(39_000);
+        const current = requireIssue(resolvedIssue, "Resolved issue missing before hire approval");
+        await createHireApproval(company.id, current);
+        console.log(`Created hire approval for ${current.identifier}`);
       })(),
     ];
 
@@ -240,16 +377,12 @@ async function main(): Promise<void> {
 
     await context.close();
     await browser.close();
-    browserClosed = true;
 
     console.log(`Wrote ${MP4_PATH}`);
     console.log(`Wrote ${GIF_PATH}`);
     console.log(`Wrote ${POSTER_PATH}`);
     console.log(`Demo company available at ${BASE_URL}/${company.issuePrefix}/aperture`);
   } finally {
-    if (!browserClosed) {
-      // no-op; browser/context are scoped above and will be closed by process exit on failure
-    }
     await rm(framesDir, { recursive: true, force: true });
   }
 }

@@ -12,8 +12,8 @@ importers:
         specifier: 2026.318.0
         version: 2026.318.0(react@19.2.4)
       '@tomismeta/aperture-core':
-        specifier: ^0.2.2
-        version: 0.2.2
+        specifier: ^0.3.0
+        version: 0.3.0
     devDependencies:
       '@rollup/plugin-node-resolve':
         specifier: ^16.0.1
@@ -400,8 +400,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@tomismeta/aperture-core@0.2.2':
-    resolution: {integrity: sha512-1POp55mSjLp/HeIqd5MUAbFa8iimbTJ8XI3UwnWsMoH2RvaFi+YI9G1lSGP2OwM44H8LN/u74pdvFljKwuivXw==}
+  '@tomismeta/aperture-core@0.3.0':
+    resolution: {integrity: sha512-xOaeg3NscP86TZc0zUD2tHtDJFMWgsxInLUVvaaBW9ANmvOjAtB1tFecg3cZkvZNXF/3QdlmlAhOUbPxQIU0Ow==}
     engines: {node: '>=18'}
 
   '@types/chai@5.2.3':
@@ -953,7 +953,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.59.0':
     optional: true
 
-  '@tomismeta/aperture-core@0.2.2': {}
+  '@tomismeta/aperture-core@0.3.0': {}
 
   '@types/chai@5.2.3':
     dependencies:

@@ -7,8 +7,10 @@ import {
 import {
   createAttentionSnapshot,
   createEmptyLedger,
-  type AttentionLedger,
   type AttentionLedgerEntry,
+  type AttentionLedgerEventEntry,
+  type AttentionLedgerResponseEntry,
+  type AttentionLedger,
   type AttentionSnapshot,
   type SnapshotSource,
 } from "./types.js";
@@ -53,6 +55,61 @@ export class ApertureCompanyStore {
     const session = this.ensureSession(companyId);
     session.ledger = [...session.ledger, entry];
     return this.getLedger(companyId);
+  }
+
+  applyEvent(companyId: string, entry: AttentionLedgerEventEntry): {
+    frame: AttentionFrame | null;
+    ledger: AttentionLedger;
+    snapshot: AttentionSnapshot;
+  } {
+    const session = this.ensureSession(companyId);
+    const previousLedger = session.ledger;
+    const previousSnapshot = session.snapshot;
+    const previousEventCount = session.eventCount;
+
+    session.ledger = [...session.ledger, entry];
+
+    try {
+      const frame = session.core.publish(entry.apertureEvent);
+      session.eventCount += 1;
+      session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), entry.source, entry.occurredAt);
+      return {
+        frame,
+        ledger: this.getLedger(companyId),
+        snapshot: session.snapshot,
+      };
+    } catch (error) {
+      session.ledger = previousLedger;
+      session.snapshot = previousSnapshot;
+      session.eventCount = previousEventCount;
+      throw error;
+    }
+  }
+
+  applyResponse(companyId: string, entry: AttentionLedgerResponseEntry): {
+    ledger: AttentionLedger;
+    snapshot: AttentionSnapshot;
+  } {
+    const session = this.ensureSession(companyId);
+    const previousLedger = session.ledger;
+    const previousSnapshot = session.snapshot;
+    const previousEventCount = session.eventCount;
+
+    session.ledger = [...session.ledger, entry];
+
+    try {
+      session.core.submit(entry.apertureResponse);
+      session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), entry.source, entry.occurredAt);
+      return {
+        ledger: this.getLedger(companyId),
+        snapshot: session.snapshot,
+      };
+    } catch (error) {
+      session.ledger = previousLedger;
+      session.snapshot = previousSnapshot;
+      session.eventCount = previousEventCount;
+      throw error;
+    }
   }
 
   replaceLedger(companyId: string, ledger: AttentionLedger): AttentionLedger {

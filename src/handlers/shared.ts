@@ -1,10 +1,19 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
-import type { AttentionLedger, AttentionSnapshot } from "../aperture/types.js";
+import type { ApertureCompanyStore } from "../aperture/core-store.js";
+import {
+  createEmptyReviewState,
+  createEmptySnapshot,
+  type AttentionLedger,
+  type AttentionReviewState,
+  type AttentionSnapshot,
+} from "../aperture/types.js";
 
 export const ATTENTION_SNAPSHOT_STATE_KEY = "attention-snapshot";
 export const ATTENTION_LEDGER_STATE_KEY = "attention-ledger";
+export const ATTENTION_REVIEW_STATE_KEY = "attention-review";
 export const ATTENTION_UPDATES_STREAM = "attention-updates";
-export const MAX_LEDGER_ENTRIES = 250;
+
+const companyMutationQueue = new Map<string, Promise<void>>();
 
 export type AttentionUpdateEvent = {
   companyId: string;
@@ -44,7 +53,18 @@ export async function persistLedger(
 ): Promise<void> {
   await ctx.state.set(
     { scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_LEDGER_STATE_KEY },
-    ledger.slice(-MAX_LEDGER_ENTRIES),
+    ledger,
+  );
+}
+
+export async function persistReviewState(
+  ctx: PluginContext,
+  companyId: string,
+  review: AttentionReviewState,
+): Promise<void> {
+  await ctx.state.set(
+    { scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_REVIEW_STATE_KEY },
+    review,
   );
 }
 
@@ -54,4 +74,76 @@ export function emitAttentionUpdate(
 ): void {
   ctx.streams.open(ATTENTION_UPDATES_STREAM, event.companyId);
   ctx.streams.emit(ATTENTION_UPDATES_STREAM, event);
+}
+
+type PersistedAttentionMutation = {
+  ledger: AttentionLedger;
+  snapshot: AttentionSnapshot;
+  review?: AttentionReviewState;
+};
+
+export async function runAttentionMutation<T extends PersistedAttentionMutation>(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+  mutation: () => Promise<T> | T,
+): Promise<T> {
+  const prior = companyMutationQueue.get(companyId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  companyMutationQueue.set(companyId, prior.catch(() => undefined).then(() => current));
+
+  await prior.catch(() => undefined);
+
+  const previousLedger = store.getLedger(companyId);
+  const previousSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
+  const previousReview = await ctx.state.get({
+    scopeKind: "company",
+    scopeId: companyId,
+    stateKey: ATTENTION_REVIEW_STATE_KEY,
+  });
+  let persistStarted = false;
+
+  try {
+    const result = await mutation();
+    persistStarted = true;
+    await persistLedger(ctx, companyId, result.ledger);
+    try {
+      await persistSnapshot(ctx, companyId, result.snapshot);
+      if (result.review) await persistReviewState(ctx, companyId, result.review);
+    } catch (error) {
+      ctx.logger.warn("Persisted attention ledger without a matching snapshot update", {
+        companyId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    return result;
+  } catch (error) {
+    if (persistStarted) {
+      try {
+        await persistLedger(ctx, companyId, previousLedger);
+        await persistSnapshot(ctx, companyId, previousSnapshot);
+        await persistReviewState(
+          ctx,
+          companyId,
+          previousReview && typeof previousReview === "object"
+            ? previousReview as AttentionReviewState
+            : createEmptyReviewState(companyId),
+        );
+      } catch (rollbackError) {
+        ctx.logger.error("Failed to roll back attention state after mutation persistence error", {
+          companyId,
+          error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        });
+      }
+    }
+
+    store.rebuildFromLedger(companyId, previousLedger);
+    throw error;
+  } finally {
+    release();
+  }
 }

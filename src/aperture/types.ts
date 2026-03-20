@@ -31,6 +31,15 @@ export type AttentionSnapshot = {
     ambient: number;
     total: number;
   };
+  review?: {
+    lastSeenAt?: string;
+    unread: {
+      active: number;
+      queued: number;
+      ambient: number;
+      total: number;
+    };
+  };
   lastEvent?: {
     eventType: string;
     entityId?: string;
@@ -58,6 +67,63 @@ export type AttentionLedgerResponseEntry = {
 
 export type AttentionLedgerEntry = AttentionLedgerEventEntry | AttentionLedgerResponseEntry;
 export type AttentionLedger = AttentionLedgerEntry[];
+
+export type AttentionExport = {
+  companyId: string;
+  exportedAt: string;
+  ledger: AttentionLedger;
+  eventEntries: AttentionLedgerEventEntry[];
+  responseEntries: AttentionLedgerResponseEntry[];
+  snapshot: AttentionSnapshot;
+  reconciledSnapshot: AttentionSnapshot;
+  review: AttentionReviewState;
+};
+
+export type AttentionDisplayPayload = {
+  companyId: string;
+  snapshot: AttentionSnapshot;
+  reviewState: AttentionReviewState;
+};
+
+export type AttentionReplayScenarioStep =
+  | {
+      kind: "publish";
+      event: ApertureEvent;
+      label?: string;
+    }
+  | {
+      kind: "submit";
+      response: AttentionResponse;
+      label?: string;
+    };
+
+export type AttentionReplayScenario = {
+  id: string;
+  title: string;
+  description?: string;
+  doctrineTags?: string[];
+  expectations?: {
+    finalActiveInteractionId?: string | null;
+    queuedInteractionIds?: string[];
+    ambientInteractionIds?: string[];
+    resultBucketCounts?: {
+      active?: number;
+      queued?: number;
+      ambient?: number;
+    };
+  };
+  steps: AttentionReplayScenarioStep[];
+};
+
+export type AttentionReviewState = {
+  companyId: string;
+  updatedAt: string;
+  lastSeenAt?: string;
+  frames: Record<string, {
+    lastSeenAt?: string;
+    suppressedAt?: string;
+  }>;
+};
 
 export function toStoredFrame(frame: AttentionFrame | null): StoredAttentionFrame | null {
   if (!frame) return null;
@@ -99,6 +165,14 @@ export function createEmptySnapshot(companyId: string): AttentionSnapshot {
 
 export function createEmptyLedger(): AttentionLedger {
   return [];
+}
+
+export function createEmptyReviewState(companyId: string): AttentionReviewState {
+  return {
+    companyId,
+    updatedAt: new Date().toISOString(),
+    frames: {},
+  };
 }
 
 export function createAttentionSnapshot(

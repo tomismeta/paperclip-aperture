@@ -1,9 +1,9 @@
 {
   "name": "@tomismeta/paperclip-aperture",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "private": false,
-  "description": "A Paperclip plugin powered by Aperture's deterministic attention and judgment engine.",
+  "description": "The live attention layer for Paperclip, powered by Aperture's deterministic attention engine.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tomismeta/paperclip-aperture.git"
@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "2026.318.0",
-    "@tomismeta/aperture-core": "^0.2.2"
+    "@tomismeta/aperture-core": "^0.3.0"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^16.0.1",

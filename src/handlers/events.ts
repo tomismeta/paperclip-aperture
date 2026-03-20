@@ -2,7 +2,7 @@ import type { PluginContext, PluginEvent } from "@paperclipai/plugin-sdk";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import { mapPluginEventToAperture } from "../aperture/event-mapper.js";
 import type { AttentionLedgerEventEntry } from "../aperture/types.js";
-import { emitAttentionUpdate, persistLedger, persistSnapshot } from "./shared.js";
+import { emitAttentionUpdate, runAttentionMutation } from "./shared.js";
 
 const SUBSCRIBED_EVENTS: readonly string[] = [
   "approval.created",
@@ -101,16 +101,10 @@ async function handleEvent(
     apertureEvent: mapped,
   };
 
-  const nextLedger = store.appendLedgerEntry(enriched.companyId, ledgerEntry);
-
-  const { snapshot } = store.ingest(enriched.companyId, mapped, {
-    eventType: enriched.eventType,
-    entityId: enriched.entityId,
-    entityType: enriched.entityType,
+  const { snapshot } = await runAttentionMutation(ctx, store, enriched.companyId, () => {
+    const { ledger, snapshot } = store.applyEvent(enriched.companyId, ledgerEntry);
+    return { ledger, snapshot };
   });
-
-  await persistLedger(ctx, enriched.companyId, nextLedger);
-  await persistSnapshot(ctx, enriched.companyId, snapshot);
   emitAttentionUpdate(ctx, {
     companyId: enriched.companyId,
     reason: "event",

@@ -7,12 +7,36 @@ import {
 } from "@paperclipai/plugin-sdk/ui";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  createEmptySnapshot,
+  type AttentionDisplayPayload,
+  type AttentionReviewState,
   type AttentionSnapshot,
   type StoredAttentionFrame,
 } from "../aperture/types.js";
+import {
+  frameUpdatedAt,
+  isBudgetOverride,
+  type FrameLane,
+} from "../aperture/frame-model.js";
+import {
+  mergeSnapshotWithApprovals,
+  type ApprovalRecord,
+} from "../aperture/approval-frames.js";
+import { ATTENTION_CONTEXT_IDS } from "../aperture/attention-context.js";
+import { GENERIC_QUEUED_JUDGMENT, genericJudgmentLine } from "../aperture/attention-language.js";
+import { issueBlocksTargetLine, issueNeedsActionFromLine } from "../aperture/issue-intelligence.js";
+import {
+  acknowledgeFailureMessage,
+  acknowledgeSuccessMessage,
+  approvalDecisionFailureMessage,
+  approvalDecisionSuccessMessage,
+  approvalFrameUnsupportedMessage,
+  approvalRevisionFailureMessage,
+  approvalRevisionSuccessMessage,
+  commentFailureMessage,
+  commentSuccessMessage,
+  issueFrameUnsupportedMessage,
+} from "./interaction-copy.js";
 
-type FrameLane = "active" | "queued" | "ambient";
 type DisplayFrame = {
   frame: StoredAttentionFrame;
   lane: FrameLane;
@@ -21,19 +45,10 @@ type Posture = {
   glyph: "\u25CB" | "\u25D0" | "\u25CF";
   label: "calm" | "elevated" | "busy";
 };
-type ApprovalRecord = {
-  id: string;
-  companyId: string;
-  type: string;
-  status: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-};
 type ApprovalQueryResult = {
   data: ApprovalRecord[] | null;
   loading: boolean;
-  error: Error | null;
+  error: { message: string } | null;
   refresh: () => void;
 };
 type SurfaceLabel = "focus";
@@ -48,8 +63,7 @@ type SurfaceBrand = {
 // Aperture brand accent
 // Uses inline styles because the host Tailwind JIT won't scan plugin bundles
 // for arbitrary values.
-const ACCENT_COLOR = "#19A1FF";
-const ACCENT_STYLE: React.CSSProperties = { color: ACCENT_COLOR };
+const ACCENT_COLOR = "#007ACC";
 const ACCENT_BG_STYLE: React.CSSProperties = { backgroundColor: ACCENT_COLOR };
 
 function currentSurfaceBrand(): SurfaceBrand {
@@ -82,14 +96,6 @@ function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
 
-function humanizeToken(value: string): string {
-  return value
-    .split(/[_\-.]/g)
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function pluginPagePath(companyPrefix: string | null | undefined): string {
   return companyPrefix ? `/${companyPrefix}/aperture` : "/aperture";
 }
@@ -120,61 +126,72 @@ function contextValue(frame: StoredAttentionFrame, id: string): string | undefin
   return typeof item?.value === "string" && item.value.trim().length > 0 ? item.value : undefined;
 }
 
-function isBudgetOverride(frame: StoredAttentionFrame): boolean {
-  return frame.provenance?.factors?.includes("budget stop") ?? false;
-}
-
 function requestedAmount(frame: StoredAttentionFrame): string | undefined {
-  return contextValue(frame, "requested-amount");
+  return contextValue(frame, ATTENTION_CONTEXT_IDS.requestedAmount);
 }
 
 function budgetReason(frame: StoredAttentionFrame): string | undefined {
-  return contextValue(frame, "budget-reason");
+  return contextValue(frame, ATTENTION_CONTEXT_IDS.budgetReason);
 }
 
-function modeLabel(frame: StoredAttentionFrame): string {
-  switch (frame.mode) {
-    case "approval":
-      return "approval";
-    case "choice":
-      return "choice";
-    case "form":
-      return "form";
+function recommendedMoveValue(frame: StoredAttentionFrame): string | undefined {
+  return contextValue(frame, ATTENTION_CONTEXT_IDS.recommendedMove);
+}
+
+function actionOwnerValue(frame: StoredAttentionFrame): string | undefined {
+  return contextValue(frame, ATTENTION_CONTEXT_IDS.needsActionFrom);
+}
+
+function blockingTargetValue(frame: StoredAttentionFrame): string | undefined {
+  return contextValue(frame, ATTENTION_CONTEXT_IDS.blocksTarget);
+}
+
+function impactLabel(frame: StoredAttentionFrame): string {
+  return `${frame.consequence} impact`;
+}
+
+function operatorDriverLabel(value: string): string {
+  switch (value) {
+    case "in_review":
+      return "review required";
+    case "pending_approval":
+      return "approval required";
     default:
-      return "status";
+      return value.replace(/_/g, " ");
   }
 }
 
-function urgencyLabel(frame: StoredAttentionFrame): string {
-  switch (frame.tone) {
-    case "critical":
-      return "urgent";
-    case "focused":
-      return "needs attention";
-    case "ambient":
-      return "low urgency";
+function driverLabel(frame: StoredAttentionFrame): string | null {
+  if (isBudgetOverride(frame)) return "budget stop";
+
+  const issueStatus = frame.metadata?.issueStatus;
+  if (typeof issueStatus === "string" && issueStatus.trim().length > 0) {
+    return operatorDriverLabel(issueStatus);
   }
+
+  const pauseReason = frame.metadata?.pauseReason;
+  if (typeof pauseReason === "string" && pauseReason.trim().length > 0) {
+    return operatorDriverLabel(pauseReason);
+  }
+
+  const agentStatus = frame.metadata?.agentStatus;
+  if (typeof agentStatus === "string" && agentStatus.trim().length > 0) {
+    return operatorDriverLabel(agentStatus);
+  }
+
+  return null;
 }
 
-function riskLabel(frame: StoredAttentionFrame): string {
-  return `${frame.consequence} risk`;
+function driverBadgeStyle(): { className: string; style: React.CSSProperties } {
+  return {
+    className: "border-transparent",
+    style: { color: ACCENT_COLOR, backgroundColor: `${ACCENT_COLOR}14`, borderColor: `${ACCENT_COLOR}40` },
+  };
 }
 
-function toneBadgeStyle(frame: StoredAttentionFrame): { className: string; style?: React.CSSProperties } {
-  switch (frame.tone) {
-    case "critical":
-      return {
-        className: "border-transparent",
-        style: { color: ACCENT_COLOR, backgroundColor: `${ACCENT_COLOR}1a`, borderColor: `${ACCENT_COLOR}4d` },
-      };
-    case "focused":
-      return {
-        className: "border-transparent",
-        style: { color: ACCENT_COLOR, opacity: 0.8, backgroundColor: `${ACCENT_COLOR}0d`, borderColor: `${ACCENT_COLOR}33` },
-      };
-    case "ambient":
-      return { className: "border-border bg-secondary text-muted-foreground" };
-  }
+function requestDescriptor(frame: StoredAttentionFrame): string {
+  const driver = driverLabel(frame);
+  return driver ? `${sourceLabel(frame)} \u00b7 ${driver}` : sourceLabel(frame);
 }
 
 function postureForSnapshot(snapshot: AttentionSnapshot): Posture {
@@ -201,21 +218,32 @@ function actionableCount(snapshot: AttentionSnapshot): number {
 
 function judgmentLine(frame: StoredAttentionFrame, lane: FrameLane): string {
   if (frame.provenance?.whyNow) return frame.provenance.whyNow;
-
-  if (lane === "active") {
-    if (isBudgetOverride(frame)) return "Budget controls are blocking work until a board decision lands.";
-    if (frame.mode === "approval") return "A human decision is blocking work right now.";
-    if (frame.tone === "critical") return "This surfaced because it can displace the operator now.";
-    return "This is the clearest current operator focus.";
-  }
-
-  if (isBudgetOverride(frame)) return "Budget review is staged behind the current focus.";
-  if (lane === "queued") return "Important enough to keep visible, but not enough to displace now.";
-  return "Useful for awareness, but not interrupting.";
+  return genericJudgmentLine(frame, lane);
 }
 
-function frameUpdatedAt(frame: StoredAttentionFrame, snapshotUpdatedAt: string): string {
-  return frame.timing.updatedAt || snapshotUpdatedAt;
+function nextPrimaryText(frame: StoredAttentionFrame): string | null {
+  const recommendedMove = recommendedMoveValue(frame);
+  if (recommendedMove) return recommendedMove;
+
+  const summary = frame.summary?.trim();
+  if (summary) return summary;
+
+  const fallback = judgmentLine(frame, "queued");
+  return fallback === GENERIC_QUEUED_JUDGMENT ? null : fallback;
+}
+
+function supportingLine(frame: StoredAttentionFrame, lane: FrameLane): string | null {
+  const owner = actionOwnerValue(frame);
+  const target = blockingTargetValue(frame);
+  if (target && lane === "active" && entityTypeFromFrame(frame) === "issue" && driverLabel(frame) === "review required") {
+    return issueBlocksTargetLine(target);
+  }
+  if (owner && lane === "active" && entityTypeFromFrame(frame) === "issue") {
+    return issueNeedsActionFromLine(owner);
+  }
+
+  const judgment = judgmentLine(frame, lane);
+  return judgment.trim().length > 0 ? judgment : null;
 }
 
 function approvalIdForFrame(frame: StoredAttentionFrame): string | null {
@@ -252,6 +280,27 @@ function costsHref(companyPrefix: string | null | undefined): string | null {
   return companyPrefix ? `/${companyPrefix}/costs` : null;
 }
 
+function activityHref(frame: StoredAttentionFrame, companyPrefix: string | null | undefined): string | null {
+  if (!companyPrefix) return null;
+  return frame.metadata?.activityPath ? `/${companyPrefix}/${frame.metadata.activityPath}` : null;
+}
+
+function primaryLinkLabel(frame: StoredAttentionFrame): string {
+  const entityType = entityTypeFromFrame(frame);
+  switch (entityType) {
+    case "approval":
+      return "Open approval";
+    case "issue":
+      return "Open issue";
+    case "run":
+      return "Open run";
+    case "agent":
+      return "Open agent";
+    default:
+      return "Open in Paperclip";
+  }
+}
+
 function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" | "acknowledge" | "none" {
   if (approvalIdForFrame(frame) && (frame.responseSpec?.kind === "approval" || frame.mode === "approval")) {
     return "approval";
@@ -264,187 +313,225 @@ function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" 
   return "none";
 }
 
-function compactTitle(frame: StoredAttentionFrame): string {
-  return frame.title.trim().length > 0 ? frame.title : "Untitled frame";
+function unreadCount(snapshot: AttentionSnapshot | null | undefined): number {
+  return snapshot?.review?.unread.total ?? 0;
 }
 
-function approvalTitle(record: ApprovalRecord): string {
-  const payload = record.payload ?? {};
-  const explicitTitle = typeof payload.title === "string"
-    ? payload.title
-    : typeof payload.plan === "string"
-      ? payload.plan
-      : typeof payload.name === "string"
-        ? payload.name
-        : null;
-
-  if (explicitTitle) return explicitTitle;
-  return `${humanizeToken(record.type)} approval`;
-}
-
-function isBudgetOverrideRecord(record: ApprovalRecord): boolean {
-  return record.type === "budget_override_required";
-}
-
-function actionableApprovalRecords(records: ApprovalRecord[] | null): ApprovalRecord[] {
-  if (!records) return [];
-  return records
-    .filter((record) => record.status === "pending" || record.status === "revision_requested")
-    .sort((left, right) => {
-      const leftScore = isBudgetOverrideRecord(left) ? 1 : 0;
-      const rightScore = isBudgetOverrideRecord(right) ? 1 : 0;
-      if (leftScore !== rightScore) return rightScore - leftScore;
-      return (right.updatedAt ?? right.createdAt).localeCompare(left.updatedAt ?? left.createdAt);
-    });
-}
-
-function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFrame {
-  const payload = record.payload ?? {};
-  const budgetOverride = isBudgetOverrideRecord(record);
-  const requestedAmount = typeof payload.requestedAmount === "string" ? payload.requestedAmount : undefined;
-  const reason = typeof payload.reason === "string" ? payload.reason : undefined;
-  const decisionContext = typeof payload.decisionContext === "string" ? payload.decisionContext : undefined;
-  const summary = typeof payload.summary === "string"
-    ? payload.summary
-    : budgetOverride
-      ? "Budget controls are blocking work until a board decision lands."
-      : "A board decision is blocking work in Paperclip.";
-  const updatedAt = record.updatedAt ?? record.createdAt;
-
-  return {
-    id: `approval-bootstrap:${record.id}`,
-    taskId: `approval:${record.id}`,
-    interactionId: `approval:${record.id}:approval`,
-    source: {
-      id: "paperclip:approval",
-      kind: "paperclip",
-      label: "Paperclip approval",
-    },
-    version: 1,
-    mode: "approval",
-    tone: "focused",
-    consequence: budgetOverride ? "high" : "medium",
-    title: approvalTitle(record),
-    summary,
-    context: {
-      items: [
-        {
-          id: "approval-type",
-          label: "Type",
-          value: humanizeToken(record.type),
-        },
-        ...(requestedAmount ? [{
-          id: "requested-amount",
-          label: "Requested amount",
-          value: requestedAmount,
-        }] : []),
-        ...(reason ? [{
-          id: "budget-reason",
-          label: "Reason",
-          value: reason,
-        }] : []),
-        ...(decisionContext ? [{
-          id: "decision-context",
-          label: "Decision context",
-          value: decisionContext,
-        }] : []),
-      ],
-    },
-    responseSpec: {
-      kind: "approval",
-      actions: [
-        { id: "approve", label: "Approve", kind: "approve", emphasis: "primary" },
-        { id: "reject", label: "Reject", kind: "reject", emphasis: "danger" },
-        ...(budgetOverride
-          ? [{ id: "request-revision", label: "Request revision", kind: "cancel" as const, emphasis: "secondary" as const }]
-          : []),
-      ],
-    },
-    provenance: {
-      whyNow: budgetOverride
-        ? "Budget controls are blocking work until a board decision lands."
-        : "Paperclip is waiting on a human approval before work can continue.",
-      factors: budgetOverride
-        ? ["budget stop", "approval", "operator decision"]
-        : ["approval", "operator decision"],
-    },
-    timing: {
-      createdAt: record.createdAt,
-      updatedAt,
-    },
-    metadata: {
-      approvalStatus: record.status,
-      approvalType: record.type,
-    },
-  };
-}
-
-function frameSortScore(frame: StoredAttentionFrame, lane: FrameLane): number {
-  const toneWeight = frame.tone === "critical" ? 40 : frame.tone === "focused" ? 25 : 5;
-  const consequenceWeight = frame.consequence === "high" ? 30 : frame.consequence === "medium" ? 15 : 0;
-  const modeWeight = frame.mode === "approval" ? 12 : frame.mode === "choice" ? 8 : 0;
-  const laneWeight = lane === "active" ? 20 : lane === "queued" ? 10 : 0;
-  const budgetWeight = isBudgetOverride(frame) ? 10 : 0;
-  return toneWeight + consequenceWeight + modeWeight + laneWeight + budgetWeight;
-}
-
-function mergeSnapshotWithApprovals(
+function applyLocalSuppressions(
   snapshot: AttentionSnapshot | null,
-  companyId: string,
-  approvals: ApprovalRecord[] | null,
-): AttentionSnapshot {
-  const base = snapshot ?? createEmptySnapshot(companyId);
-  const approvalFrames = actionableApprovalRecords(approvals).map(approvalRecordToFrame);
-  const baseNonApprovalActive = base.active && !approvalIdForFrame(base.active) ? base.active : null;
-  const baseNonApprovalQueued = base.queued.filter((frame) => !approvalIdForFrame(frame));
-  const baseAmbient = base.ambient.filter((frame) => !approvalIdForFrame(frame));
+  suppressedAtByTaskId: Record<string, string>,
+): AttentionSnapshot | null {
+  if (!snapshot || Object.keys(suppressedAtByTaskId).length === 0) return snapshot;
 
-  if (approvalFrames.length === 0) {
-    return {
-      ...base,
-      active: baseNonApprovalActive,
-      queued: baseNonApprovalQueued,
-      ambient: baseAmbient,
-      counts: {
-        active: baseNonApprovalActive ? 1 : 0,
-        queued: baseNonApprovalQueued.length,
-        ambient: baseAmbient.length,
-        total: (baseNonApprovalActive ? 1 : 0) + baseNonApprovalQueued.length + baseAmbient.length,
-      },
-    };
-  }
+  const keepFrame = (frame: StoredAttentionFrame) => {
+    const suppressedAt = suppressedAtByTaskId[frame.taskId];
+    if (!suppressedAt) return true;
+    return frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(suppressedAt) > 0;
+  };
 
-  const candidates: Array<{ frame: StoredAttentionFrame; lane: FrameLane }> = [
-    ...(baseNonApprovalActive ? [{ frame: baseNonApprovalActive, lane: "active" as const }] : []),
-    ...baseNonApprovalQueued.map((frame) => ({ frame, lane: "queued" as const })),
-    ...approvalFrames.map((frame, index) => ({ frame, lane: index === 0 ? "active" as const : "queued" as const })),
-  ].sort((left, right) => {
-    const byScore = frameSortScore(right.frame, right.lane) - frameSortScore(left.frame, left.lane);
-    if (byScore !== 0) return byScore;
-    return frameUpdatedAt(right.frame, base.updatedAt).localeCompare(frameUpdatedAt(left.frame, base.updatedAt));
-  });
-
-  const active = candidates[0]?.frame ?? null;
-  const queued = candidates.slice(1).map((entry) => entry.frame);
+  const queued = snapshot.queued.filter(keepFrame);
+  const ambient = snapshot.ambient.filter(keepFrame);
+  const activeCandidate = snapshot.active && keepFrame(snapshot.active) ? snapshot.active : null;
+  const active = activeCandidate ?? queued[0] ?? null;
+  const nextQueued = activeCandidate ? queued : queued.slice(1);
 
   return {
-    ...base,
+    ...snapshot,
     active,
-    queued,
-    ambient: baseAmbient,
+    queued: nextQueued,
+    ambient,
     counts: {
       active: active ? 1 : 0,
-      queued: queued.length,
-      ambient: baseAmbient.length,
-      total: (active ? 1 : 0) + queued.length + baseAmbient.length,
+      queued: nextQueued.length,
+      ambient: ambient.length,
+      total: (active ? 1 : 0) + nextQueued.length + ambient.length,
     },
   };
+}
+
+function suppressionMapFromReview(review: AttentionReviewState | null | undefined): Record<string, string> {
+  if (!review) return {};
+
+  return Object.fromEntries(
+    Object.entries(review.frames)
+      .filter(([, state]) => typeof state?.suppressedAt === "string" && state.suppressedAt.length > 0)
+      .map(([taskId, state]) => [taskId, state.suppressedAt as string]),
+  );
+}
+
+function isFrameUnreadInSnapshot(frame: StoredAttentionFrame, snapshot: AttentionSnapshot): boolean {
+  const seenAt = snapshot.review?.lastSeenAt;
+  if (!seenAt) return true;
+  return frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(seenAt) > 0;
+}
+
+function UnreadDot({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return <span className="inline-block h-2 w-2 rounded-full shrink-0" style={ACCENT_BG_STYLE} aria-label="Unread attention item" />;
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
+      <path d="M8.5 1.5h6v6" />
+      <path d="M14.5 1.5l-7 7" />
+    </svg>
+  );
+}
+
+function SkeletonLine(props: { className?: string }) {
+  return <div className={cn("animate-pulse rounded bg-secondary/80", props.className)} aria-hidden="true" />;
+}
+
+function MessageCard(props: {
+  title: string;
+  body: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="border border-border bg-card p-4 shadow-sm">
+      <div className={cn("text-sm font-medium", props.accent && "text-foreground")}>
+        {props.title}
+      </div>
+      <div className="mt-1 text-sm text-muted-foreground">{props.body}</div>
+    </div>
+  );
+}
+
+function WidgetLoadingState({ label }: { label: string }) {
+  return (
+    <div className="border border-border bg-card px-4 py-3 shadow-sm">
+      <div className="flex items-start gap-3">
+        <SkeletonLine className="mt-0.5 h-3 w-3 rounded-full" />
+        <div className="flex-1 space-y-2">
+          <SkeletonLine className="h-3 w-20" />
+          <SkeletonLine className="h-4 w-48" />
+        </div>
+        <SkeletonLine className="h-3 w-24" />
+      </div>
+      <div className="sr-only">{label}</div>
+    </div>
+  );
+}
+
+function PageLoadingState({ label }: { label: string }) {
+  return (
+    <div className="space-y-5" aria-label={label}>
+      <div className="border border-border bg-card px-4 py-3 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <SkeletonLine className="h-4 w-44" />
+          <SkeletonLine className="h-8 w-28" />
+        </div>
+      </div>
+      <div className="border border-border bg-card shadow-sm">
+        <div className="border-b border-border px-4 py-3 sm:px-6">
+          <SkeletonLine className="h-4 w-36" />
+        </div>
+        <div className="space-y-4 px-4 py-5 sm:px-6">
+          <SkeletonLine className="h-3 w-16" />
+          <SkeletonLine className="h-7 w-2/3" />
+          <div className="flex gap-2">
+            <SkeletonLine className="h-6 w-24" />
+            <SkeletonLine className="h-6 w-20" />
+            <SkeletonLine className="h-6 w-16" />
+          </div>
+          <SkeletonLine className="h-10 w-56" />
+        </div>
+      </div>
+      <div className="border border-border bg-card shadow-sm">
+        <div className="border-b border-border px-4 py-3 sm:px-6">
+          <SkeletonLine className="h-3 w-12" />
+        </div>
+        <div className="space-y-3 px-4 py-4 sm:px-6">
+          <SkeletonLine className="h-4 w-full" />
+          <SkeletonLine className="h-4 w-5/6" />
+          <SkeletonLine className="h-4 w-2/3" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusToast({ message }: { message: string | null }) {
+  return (
+    <div
+      className={cn(
+        "pointer-events-none fixed bottom-6 right-6 z-50 transition-all duration-200",
+        message ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0",
+      )}
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      {message ? (
+        <div className="min-w-72 max-w-md rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground shadow-lg">
+          {message}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function readCsrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content");
+  return token && token.trim().length > 0 ? token : null;
+}
+
+// Temporary host API bridge until the plugin SDK exposes approval reads/writes.
+async function paperclipApiFetch<TResponse = unknown>(
+  path: string,
+  options: RequestInit & { retries?: number; expectJson?: boolean } = {},
+): Promise<TResponse> {
+  const csrfToken = readCsrfToken();
+  const {
+    retries = 0,
+    expectJson = true,
+    headers,
+    ...init
+  } = options;
+
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await window.fetch(path, {
+        credentials: "same-origin",
+        ...init,
+        headers: {
+          Accept: "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+          ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+          ...(headers ?? {}),
+        },
+      });
+
+      if (!response.ok) {
+        const responseBody = await response.text().catch(() => "");
+        const detail = responseBody.trim().length > 0 ? `: ${responseBody.trim()}` : "";
+        throw new Error(`Request failed (${response.status})${detail}`);
+      }
+
+      if (!expectJson) return undefined as TResponse;
+      return await response.json() as TResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= retries) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+
+  throw lastError ?? new Error("Request failed.");
+}
+
+function compactTitle(frame: StoredAttentionFrame): string {
+  return frame.title.trim().length > 0 ? frame.title : "Untitled frame";
 }
 
 function usePendingApprovals(companyId: string | null | undefined): ApprovalQueryResult {
   const [data, setData] = useState<ApprovalRecord[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const [error, setError] = useState<{ message: string } | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   useEffect(() => {
@@ -460,21 +547,17 @@ function usePendingApprovals(companyId: string | null | undefined): ApprovalQuer
     async function loadApprovals() {
       try {
         setError(null);
-        const response = await window.fetch(`/api/companies/${companyId}/approvals?status=pending`, {
+        const approvals = await paperclipApiFetch<ApprovalRecord[]>(`/api/companies/${companyId}/approvals?status=pending`, {
           method: "GET",
-          credentials: "same-origin",
+          retries: 1,
         });
-        if (!response.ok) {
-          throw new Error(`Failed to load approvals (${response.status})`);
-        }
-        const approvals = await response.json() as ApprovalRecord[];
         if (!cancelled) {
           setData(approvals);
           setLoading(false);
         }
       } catch (fetchError) {
         if (!cancelled) {
-          setError(fetchError instanceof Error ? fetchError : new Error(String(fetchError)));
+          setError({ message: fetchError instanceof Error ? fetchError.message : String(fetchError) });
           setLoading(false);
         }
       }
@@ -523,13 +606,11 @@ function HighlightedTitle({ text }: { text: string }) {
     parts.push(text.slice(lastIndex));
   }
 
-  return parts.length > 1 ? <>{parts}</> : null;
+  return <>{parts}</>;
 }
 
 function renderTitle(frame: StoredAttentionFrame): ReactNode {
-  const text = compactTitle(frame);
-  const highlighted = HighlightedTitle({ text });
-  return highlighted ?? text;
+  return <HighlightedTitle text={compactTitle(frame)} />;
 }
 
 function useAttentionPolling(
@@ -543,14 +624,104 @@ function useAttentionPolling(
   useEffect(() => {
     if (!companyId) return;
 
-    const timer = window.setInterval(() => {
+    function refreshVisible() {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       for (const refresh of refreshersRef.current) refresh();
+    }
+
+    const timer = window.setInterval(() => {
+      refreshVisible();
     }, intervalMs);
+
+    function handleVisibilityChange() {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        for (const refresh of refreshersRef.current) refresh();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [companyId, intervalMs]);
+}
+
+type QueueMovement = "up" | "down";
+
+function useQueueMovement(frames: StoredAttentionFrame[], ttlMs = 3500): Record<string, QueueMovement> {
+  const previousPositionsRef = useRef<Record<string, number>>({});
+  const timersRef = useRef<Record<string, number>>({});
+  const [movementById, setMovementById] = useState<Record<string, QueueMovement>>({});
+
+  useEffect(() => {
+    const nextPositions = Object.fromEntries(frames.map((frame, index) => [frame.interactionId, index]));
+
+    setMovementById((current) => {
+      const updates: Record<string, QueueMovement> = {};
+
+      for (const frame of frames) {
+        const previousIndex = previousPositionsRef.current[frame.interactionId];
+        const nextIndex = nextPositions[frame.interactionId];
+        if (typeof previousIndex !== "number" || previousIndex === nextIndex) continue;
+        updates[frame.interactionId] = nextIndex < previousIndex ? "up" : "down";
+      }
+
+      if (Object.keys(updates).length === 0) return current;
+
+      const merged = { ...current, ...updates };
+      for (const [interactionId, movement] of Object.entries(updates)) {
+        window.clearTimeout(timersRef.current[interactionId]);
+        timersRef.current[interactionId] = window.setTimeout(() => {
+          setMovementById((active) => {
+            if (active[interactionId] !== movement) return active;
+            const next = { ...active };
+            delete next[interactionId];
+            return next;
+          });
+          delete timersRef.current[interactionId];
+        }, ttlMs);
+      }
+
+      return merged;
+    });
+
+    previousPositionsRef.current = nextPositions;
+
+    return () => {
+      for (const timer of Object.values(timersRef.current)) window.clearTimeout(timer);
+    };
+  }, [frames, ttlMs]);
+
+  return movementById;
+}
+
+function useAttentionModel(companyId: string | null | undefined) {
+  const displayQuery = usePluginData<AttentionDisplayPayload>("attention-display", companyId ? { companyId } : undefined);
+  const approvalsQuery = usePendingApprovals(companyId);
+
+  useAttentionPolling(companyId, [displayQuery.refresh, approvalsQuery.refresh]);
+
+  const snapshot = useMemo(
+    () => (
+      companyId
+        ? mergeSnapshotWithApprovals(displayQuery.data?.snapshot ?? null, companyId, approvalsQuery.data, displayQuery.data?.reviewState ?? null)
+        : null
+    ),
+    [displayQuery.data, approvalsQuery.data, companyId],
+  );
+
+  return {
+    snapshot,
+    review: displayQuery.data?.reviewState ?? null,
+    loading: displayQuery.loading || approvalsQuery.loading,
+    error: displayQuery.error ?? approvalsQuery.error,
+    refresh() {
+      displayQuery.refresh();
+      approvalsQuery.refresh();
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -575,6 +746,7 @@ function ActionButton(props: {
   label: string;
   tone: "primary" | "danger" | "secondary";
   disabled?: boolean;
+  className?: string;
   onClick: () => void;
 }) {
   const toneClass =
@@ -595,10 +767,29 @@ function ActionButton(props: {
         "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
         "disabled:pointer-events-none disabled:opacity-50",
         toneClass,
+        props.className,
       )}
     >
       {props.label}
     </button>
+  );
+}
+
+function QueueMovementBadge({ movement }: { movement?: QueueMovement }) {
+  if (!movement) return null;
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium"
+      style={{
+        color: ACCENT_COLOR,
+        backgroundColor: `${ACCENT_COLOR}12`,
+        borderColor: `${ACCENT_COLOR}33`,
+      }}
+    >
+      <span aria-hidden="true">{movement === "up" ? "\u2191" : "\u2193"}</span>
+      {movement === "up" ? "moved up" : "moved down"}
+    </span>
   );
 }
 
@@ -610,7 +801,6 @@ function FrameActions(props: {
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
-  onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
   compact?: boolean;
 }) {
   const actionMode = responseKind(props.frame, props.lane);
@@ -644,20 +834,12 @@ function FrameActions(props: {
           />
         </>
       ) : (
-        <>
-          <ActionButton
-            label={isPending ? "Saving\u2026" : "Acknowledge"}
-            tone="primary"
-            disabled={isPending}
-            onClick={() => void props.onAcknowledge(props.frame)}
-          />
-          <ActionButton
-            label="Dismiss"
-            tone="secondary"
-            disabled={isPending}
-            onClick={() => void props.onDismiss(props.frame)}
-          />
-        </>
+        <ActionButton
+          label={isPending ? "Saving\u2026" : "Acknowledge"}
+          tone="primary"
+          disabled={isPending}
+          onClick={() => void props.onAcknowledge(props.frame)}
+        />
       )}
     </div>
   );
@@ -672,13 +854,107 @@ function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
   if (items.length === 0) return null;
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
+    <div className="grid gap-2 md:grid-cols-2">
       {items.map((item) => (
-        <div key={item.id} className="border border-border bg-secondary/50 px-3 py-2">
+        <div
+          key={item.id}
+          className={cn(
+            "border border-border bg-secondary/50 px-3 py-2",
+            (
+              item.id === ATTENTION_CONTEXT_IDS.latestComment
+              || item.id === ATTENTION_CONTEXT_IDS.recommendedMove
+            ) && "md:col-span-2",
+          )}
+        >
           <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
           <div className="mt-1 text-sm text-foreground">{item.value ?? "Available"}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function isIssueFrame(frame: StoredAttentionFrame): boolean {
+  return entityTypeFromFrame(frame) === "issue";
+}
+
+function IssueCommentComposer(props: {
+  frame: StoredAttentionFrame;
+  pendingId: string | null;
+  onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
+  triggerTone?: "link" | "secondary" | "primary";
+  triggerLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState("");
+
+  if (!isIssueFrame(props.frame)) return null;
+
+  const isPending = props.pendingId === props.frame.id;
+
+  async function submit() {
+    const nextBody = body.trim();
+    if (!nextBody) return;
+    await props.onComment(props.frame, nextBody);
+    setBody("");
+    setOpen(false);
+  }
+
+  if (!open) {
+    const label = props.triggerLabel ?? "Leave comment";
+    const triggerTone = props.triggerTone ?? "link";
+
+    if (triggerTone === "link") {
+      return (
+        <button
+          type="button"
+          className="text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          onClick={() => setOpen(true)}
+        >
+          {label}
+        </button>
+      );
+    }
+
+    return (
+      <ActionButton
+        label={label}
+        tone={triggerTone}
+        className="w-full"
+        disabled={isPending}
+        onClick={() => setOpen(true)}
+      />
+    );
+  }
+
+  return (
+    <div className="w-full space-y-2 border border-border bg-secondary/40 p-3">
+      <textarea
+        value={body}
+        onChange={(event) => setBody(event.target.value)}
+        rows={3}
+        placeholder="Add a short operator note back to the issue…"
+        className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none transition focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <ActionButton
+          label="Cancel"
+          tone="secondary"
+          className="w-full"
+          disabled={isPending}
+          onClick={() => {
+            setOpen(false);
+            setBody("");
+          }}
+        />
+        <ActionButton
+          label={isPending ? "Posting…" : "Post comment"}
+          tone="primary"
+          className="w-full"
+          disabled={isPending || body.trim().length === 0}
+          onClick={() => void submit()}
+        />
+      </div>
     </div>
   );
 }
@@ -691,34 +967,19 @@ function NowDetails(props: {
   const { frame, snapshotUpdatedAt } = props;
   const href = itemHref(frame, props.companyPrefix);
   const budgetHref = isBudgetOverride(frame) ? costsHref(props.companyPrefix) : null;
+  const activityLink = activityHref(frame, props.companyPrefix);
 
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      {/* Summary — moved here from always-visible */}
-      {frame.summary ? (
-        <p className="text-sm leading-relaxed text-muted-foreground">{frame.summary}</p>
-      ) : null}
-
-      <div className="grid gap-2 sm:grid-cols-2">
-        {/* Why now */}
-        <div className="border border-border bg-secondary/50 px-3 py-2">
-          <div className="text-xs font-medium text-muted-foreground">Judgment</div>
-          <p className="mt-1 text-sm text-foreground/90">{judgmentLine(frame, "active")}</p>
-        </div>
-
-        {/* Request metadata */}
-        <div className="border border-border bg-secondary/50 px-3 py-2">
-          <div className="text-xs font-medium text-muted-foreground">Request</div>
-          <div className="mt-1 space-y-0.5 text-sm">
-            <div className="text-foreground/90">{sourceLabel(frame)} &middot; {modeLabel(frame)}</div>
-            <div className="text-muted-foreground">{riskLabel(frame)} &middot; {formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}</div>
-            {requestedAmount(frame) ? (
-              <div className="text-foreground/90">Amount requested: {requestedAmount(frame)}</div>
-            ) : null}
-            {budgetReason(frame) ? (
-              <div className="text-muted-foreground">{budgetReason(frame)}</div>
-            ) : null}
-          </div>
+      <div className="border border-border bg-secondary/50 px-3 py-2">
+        <div className="text-xs font-medium text-muted-foreground">Judgment</div>
+        <p className="mt-1 text-sm text-foreground/90">{judgmentLine(frame, "active")}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <span>{requestDescriptor(frame)}</span>
+          <span>{impactLabel(frame)}</span>
+          <span>{formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}</span>
+          {requestedAmount(frame) ? <span>Amount requested: {requestedAmount(frame)}</span> : null}
+          {budgetReason(frame) ? <span>{budgetReason(frame)}</span> : null}
         </div>
       </div>
 
@@ -732,12 +993,20 @@ function NowDetails(props: {
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
           >
-            Open in Paperclip
-            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
-              <path d="M8.5 1.5h6v6" />
-              <path d="M14.5 1.5l-7 7" />
-            </svg>
+            {primaryLinkLabel(frame)}
+            <ExternalLinkIcon />
+          </a>
+        ) : null}
+
+        {activityLink ? (
+          <a
+            href={activityLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Open activity
+            <ExternalLinkIcon />
           </a>
         ) : null}
 
@@ -750,11 +1019,7 @@ function NowDetails(props: {
             style={{ color: "inherit" }}
           >
             Review in Costs
-            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
-              <path d="M8.5 1.5h6v6" />
-              <path d="M14.5 1.5l-7 7" />
-            </svg>
+            <ExternalLinkIcon />
           </a></Accent>
         ) : null}
       </div>
@@ -770,6 +1035,93 @@ function QuietNow() {
   );
 }
 
+function NowActionRail(props: {
+  frame: StoredAttentionFrame;
+  lane: FrameLane;
+  pendingId: string | null;
+  itemLink: string | null;
+  onApprove: (frame: StoredAttentionFrame) => Promise<void>;
+  onReject: (frame: StoredAttentionFrame) => Promise<void>;
+  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
+  onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
+  onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
+}) {
+  const actionMode = responseKind(props.frame, props.lane);
+  const isPending = props.pendingId === props.frame.id;
+  const commentEnabled = actionMode === "acknowledge" && isIssueFrame(props.frame);
+
+  return (
+    <aside
+      className="space-y-4 border border-border bg-secondary/20 p-4"
+      style={{ flex: "0 1 20rem", minWidth: "18rem" }}
+    >
+      <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+        Actions
+      </div>
+
+      <div className="space-y-2">
+        {commentEnabled ? (
+          <IssueCommentComposer
+            frame={props.frame}
+            pendingId={props.pendingId}
+            onComment={props.onComment}
+            triggerTone="primary"
+            triggerLabel="Comment"
+          />
+        ) : null}
+
+        {actionMode === "approval" ? (
+          <>
+            {isBudgetOverride(props.frame) ? (
+              <ActionButton
+                label="Request revision"
+                tone="secondary"
+                disabled={isPending}
+                className="w-full"
+                onClick={() => void props.onRequestRevision(props.frame)}
+              />
+            ) : null}
+            <ActionButton
+              label={isPending ? "Submitting…" : "Approve"}
+              tone="primary"
+              disabled={isPending}
+              className="w-full"
+              onClick={() => void props.onApprove(props.frame)}
+            />
+            <ActionButton
+              label="Reject"
+              tone="danger"
+              disabled={isPending}
+              className="w-full"
+              onClick={() => void props.onReject(props.frame)}
+            />
+          </>
+        ) : actionMode === "acknowledge" ? (
+          <ActionButton
+            label={isPending ? "Saving…" : "Acknowledge"}
+            tone={commentEnabled ? "secondary" : "primary"}
+            disabled={isPending}
+            className="w-full"
+            onClick={() => void props.onAcknowledge(props.frame)}
+          />
+        ) : null}
+      </div>
+
+      {props.itemLink ? (
+        <a
+          href={props.itemLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {primaryLinkLabel(props.frame)}
+          <ExternalLinkIcon />
+        </a>
+      ) : null}
+    </aside>
+  );
+}
+
 function NowPane(props: {
   snapshot: AttentionSnapshot;
   posture: Posture;
@@ -781,11 +1133,16 @@ function NowPane(props: {
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
-  onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
+  onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
   const frame = props.snapshot.active;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const activeFrameId = frame?.id ?? null;
+  const activeUnread = !!frame && (props.snapshot.review?.unread.active ?? 0) > 0;
+  const itemLink = frame ? itemHref(frame, props.companyPrefix) : null;
+  const recommendedMove = frame ? recommendedMoveValue(frame) : null;
+  const helperLine = frame ? supportingLine(frame, "active") : null;
+  const driverBadge = driverBadgeStyle();
 
   // Reset disclosure only when the *active frame* actually changes identity
   useEffect(() => {
@@ -818,80 +1175,87 @@ function NowPane(props: {
         </div>
       </div>
 
-      <div style={{ height: "1.25rem" }} aria-hidden="true" />
-      <div className="px-4 pb-5 sm:px-6">
+      <div style={{ height: "0.75rem" }} aria-hidden="true" />
+      <div className="px-4 pb-4 sm:px-6">
         {!frame ? (
           <QuietNow />
         ) : (
           <div className="space-y-4">
-            {/* Row 1: NOW label */}
-            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <span>Now</span>
-              <span className="normal-case tracking-normal" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
-            </div>
+            <div className="flex flex-wrap items-start gap-6">
+              <div className="min-w-0 space-y-4" style={{ flex: "1 1 40rem" }}>
+                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <span>Now</span>
+                  <span className="normal-case tracking-normal" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
+                </div>
 
-            {/* Row 2: Title */}
-            <div className="text-lg font-semibold leading-snug text-foreground">{renderTitle(frame)}</div>
+                {recommendedMove ? (
+                  <div className="max-w-4xl text-[2rem] font-semibold leading-tight text-foreground">
+                    {recommendedMove}
+                  </div>
+                ) : frame.summary ? (
+                  <div className="max-w-4xl text-[2rem] font-semibold leading-tight text-foreground">
+                    {frame.summary}
+                  </div>
+                ) : null}
 
-            {/* Row 3: Badges (left) + Actions (right) — same line */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge className={toneBadgeStyle(frame).className} style={toneBadgeStyle(frame).style}>{urgencyLabel(frame)}</Badge>
-              <Badge className="border-border bg-secondary text-foreground/80">{riskLabel(frame)}</Badge>
-              <Badge className="border-border bg-secondary text-muted-foreground">{modeLabel(frame)}</Badge>
-              {isBudgetOverride(frame) ? (
-                <Badge className="border-transparent text-white" style={ACCENT_BG_STYLE}>budget stop</Badge>
-              ) : null}
-              <div className="ml-auto flex items-center gap-2">
-                <FrameActions
-                  frame={frame}
-                  lane="active"
-                  pendingId={props.pendingId}
-                  onApprove={props.onApprove}
-                  onReject={props.onReject}
-                  onRequestRevision={props.onRequestRevision}
-                  onAcknowledge={props.onAcknowledge}
-                  onDismiss={props.onDismiss}
-                />
+                <div className="flex items-center gap-2 text-[1.75rem] font-medium leading-snug text-foreground/90">
+                  <UnreadDot visible={activeUnread} />
+                  <span>{renderTitle(frame)}</span>
+                </div>
+
+                {helperLine ? (
+                  <p className="max-w-3xl text-[0.95rem] leading-relaxed text-muted-foreground">
+                    {helperLine}
+                  </p>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="border-border bg-secondary text-foreground/80">{impactLabel(frame)}</Badge>
+                  {driverLabel(frame) ? (
+                    <Badge className={driverBadge.className} style={driverBadge.style}>{driverLabel(frame)}</Badge>
+                  ) : null}
+                </div>
+
+                <div className="flex items-center gap-4 pt-1">
+                  <Accent><button
+                    type="button"
+                    onClick={() => setDetailsOpen(!detailsOpen)}
+                    aria-expanded={detailsOpen}
+                    className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
+                    style={{ color: "inherit" }}
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+                    </svg>
+                    {detailsOpen ? "Hide details" : "Show details"}
+                  </button></Accent>
+                </div>
               </div>
-            </div>
 
-            {/* Row 4: Show details (chevron toggle) + Open in Paperclip (external link) */}
-            <div className="flex items-center gap-4 pb-1">
-              <Accent><button
-                type="button"
-                onClick={() => setDetailsOpen(!detailsOpen)}
-                className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
-                style={{ color: "inherit" }}
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
-                  fill="currentColor"
-                >
-                  <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
-                </svg>
-                {detailsOpen ? "Hide details" : "Show details"}
-              </button></Accent>
-
-              {itemHref(frame, props.companyPrefix) ? (
-                <a
-                  href={itemHref(frame, props.companyPrefix)!}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-xs font-medium text-muted-foreground transition-opacity hover:text-foreground"
-                >
-                  Open in Paperclip
-                  <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
-                    <path d="M8.5 1.5h6v6" />
-                    <path d="M14.5 1.5l-7 7" />
-                  </svg>
-                </a>
-              ) : null}
+              <NowActionRail
+                frame={frame}
+                lane="active"
+                pendingId={props.pendingId}
+                itemLink={itemLink}
+                onApprove={props.onApprove}
+                onReject={props.onReject}
+                onRequestRevision={props.onRequestRevision}
+                onAcknowledge={props.onAcknowledge}
+                onComment={props.onComment}
+              />
             </div>
 
             {detailsOpen ? (
-              <NowDetails frame={frame} snapshotUpdatedAt={props.snapshot.updatedAt} companyPrefix={props.companyPrefix} />
+              <NowDetails
+                frame={frame}
+                snapshotUpdatedAt={props.snapshot.updatedAt}
+                companyPrefix={props.companyPrefix}
+              />
             ) : null}
           </div>
         )}
@@ -908,6 +1272,8 @@ function NowPane(props: {
 function NextRow(props: {
   rank: number;
   frame: StoredAttentionFrame;
+  movement?: QueueMovement;
+  snapshot: AttentionSnapshot;
   snapshotUpdatedAt: string;
   companyPrefix: string | null | undefined;
   pendingId: string | null;
@@ -915,28 +1281,41 @@ function NextRow(props: {
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
-  onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
+  onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
   const { frame } = props;
   const [expanded, setExpanded] = useState(false);
+  const unread = isFrameUnreadInSnapshot(frame, props.snapshot);
+  const activityLink = activityHref(frame, props.companyPrefix);
+  const itemLink = itemHref(frame, props.companyPrefix);
+  const secondaryText = nextPrimaryText(frame);
+  const driver = driverLabel(frame);
+  const driverBadge = driverBadgeStyle();
+  const detailText = judgmentLine(frame, "queued");
+  const showDetailText = detailText.trim().length > 0 && detailText !== secondaryText && detailText !== GENERIC_QUEUED_JUDGMENT;
 
   return (
     <div className="border-b border-border/80 last:border-b-0" style={expanded ? { borderLeftWidth: 2, borderLeftColor: ACCENT_COLOR } : undefined}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
         className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50 sm:px-6"
       >
         <Accent className="w-5 shrink-0 text-xs font-medium tabular-nums">
           {String(props.rank).padStart(2, "0")}
         </Accent>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-          {renderTitle(frame)}
-        </span>
-        {isBudgetOverride(frame) ? (
-          <Badge className="border-transparent shrink-0 text-white" style={ACCENT_BG_STYLE}>budget</Badge>
+        <UnreadDot visible={unread} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-foreground">{renderTitle(frame)}</div>
+          {secondaryText ? (
+            <div className="truncate text-xs text-muted-foreground">{secondaryText}</div>
+          ) : null}
+        </div>
+        <QueueMovementBadge movement={props.movement} />
+        {driver ? (
+          <Badge className={cn("shrink-0", driverBadge.className)} style={driverBadge.style}>{driver}</Badge>
         ) : null}
-        <Badge className={cn("shrink-0", toneBadgeStyle(frame).className)} style={toneBadgeStyle(frame).style}>{urgencyLabel(frame)}</Badge>
         <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.7 }}>
           {formatRelativeTime(frameUpdatedAt(frame, props.snapshotUpdatedAt))}
         </span>
@@ -944,6 +1323,7 @@ function NextRow(props: {
           viewBox="0 0 16 16"
           className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")}
           fill="currentColor"
+          aria-hidden="true"
         >
           <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
         </svg>
@@ -951,21 +1331,34 @@ function NextRow(props: {
 
       {expanded ? (
         <div className="space-y-3 px-4 pb-3 pl-12 sm:px-6 sm:pl-14">
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            {frame.summary ?? judgmentLine(frame, "queued")}
-          </p>
+          {showDetailText ? (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              {detailText}
+            </p>
+          ) : null}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span>{riskLabel(frame)}</span>
+            <span>{impactLabel(frame)}</span>
+            {driver ? <Accent>{driver}</Accent> : null}
+            {props.movement ? <Accent>{props.movement === "up" ? "rising in queue" : "falling in queue"}</Accent> : null}
             <span>updated {formatRelativeTime(frameUpdatedAt(frame, props.snapshotUpdatedAt))}</span>
-            {itemHref(frame, props.companyPrefix) ? (
+            {itemLink ? (
               <a
-                href={itemHref(frame, props.companyPrefix)!}
+                href={itemLink}
                 className="font-medium underline underline-offset-2 hover:text-foreground"
               >
-                View in Paperclip
+                {primaryLinkLabel(frame)}
+              </a>
+            ) : null}
+            {activityLink ? (
+              <a
+                href={activityLink}
+                className="font-medium underline underline-offset-2 hover:text-foreground"
+              >
+                Open activity
               </a>
             ) : null}
           </div>
+          <IssueCommentComposer frame={frame} pendingId={props.pendingId} onComment={props.onComment} />
           <FrameActions
             frame={frame}
             lane="queued"
@@ -974,7 +1367,6 @@ function NextRow(props: {
             onReject={props.onReject}
             onRequestRevision={props.onRequestRevision}
             onAcknowledge={props.onAcknowledge}
-            onDismiss={props.onDismiss}
           />
         </div>
       ) : null}
@@ -983,7 +1375,9 @@ function NextRow(props: {
 }
 
 function NextLane(props: {
+  snapshot: AttentionSnapshot;
   rows: DisplayFrame[];
+  movement: Record<string, QueueMovement>;
   snapshotUpdatedAt: string;
   companyPrefix: string | null | undefined;
   pendingId: string | null;
@@ -991,7 +1385,7 @@ function NextLane(props: {
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
-  onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
+  onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
   return (
     <section className="border border-border/80 bg-card">
@@ -1009,6 +1403,8 @@ function NextLane(props: {
             key={row.frame.id}
             rank={i + 1}
             frame={row.frame}
+            movement={props.movement[row.frame.interactionId]}
+            snapshot={props.snapshot}
             snapshotUpdatedAt={props.snapshotUpdatedAt}
             companyPrefix={props.companyPrefix}
             pendingId={props.pendingId}
@@ -1016,7 +1412,7 @@ function NextLane(props: {
             onReject={props.onReject}
             onRequestRevision={props.onRequestRevision}
             onAcknowledge={props.onAcknowledge}
-            onDismiss={props.onDismiss}
+            onComment={props.onComment}
           />
         ))
       )}
@@ -1030,61 +1426,66 @@ function NextLane(props: {
 
 function AmbientRow(props: {
   frame: StoredAttentionFrame;
+  snapshot: AttentionSnapshot;
   snapshotUpdatedAt: string;
   companyPrefix: string | null | undefined;
-  pendingId: string | null;
-  onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
-  onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
 }) {
   const { frame, snapshotUpdatedAt } = props;
   const [expanded, setExpanded] = useState(false);
   const href = itemHref(frame, props.companyPrefix);
+  const unread = isFrameUnreadInSnapshot(frame, props.snapshot);
+  const activityLink = activityHref(frame, props.companyPrefix);
 
   return (
-    <div style={{ borderBottomWidth: 1, borderBottomColor: "var(--border)", opacity: 0.7 }} className="last:border-b-0">
+    <div style={{ borderBottomWidth: 1, borderBottomColor: "var(--border)" }} className="last:border-b-0">
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
         className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-accent/50 sm:px-6"
       >
-        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{renderTitle(frame)}</span>
+        <UnreadDot visible={unread} />
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground/80">{renderTitle(frame)}</span>
         <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
-        <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.5 }}>
+        <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.55 }}>
           {formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}
         </span>
         <svg
           viewBox="0 0 16 16"
           className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")}
           fill="currentColor"
-          style={{ opacity: 0.4 }}
+          style={{ opacity: 0.75 }}
+          aria-hidden="true"
         >
           <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
         </svg>
       </button>
 
       {expanded ? (
-        <div className="flex items-center gap-3 px-4 pb-3 sm:px-6">
-          {href ? (
-            <a
-              href={href}
-              className="text-xs font-medium underline underline-offset-2 text-muted-foreground hover:text-foreground"
-            >
-              View in Paperclip
-            </a>
-          ) : null}
-          <div className="ml-auto flex items-center gap-2">
-            <ActionButton
-              label={props.pendingId === frame.id ? "Saving\u2026" : "Acknowledge"}
-              tone="secondary"
-              disabled={props.pendingId === frame.id}
-              onClick={() => void props.onAcknowledge(frame)}
-            />
-            <ActionButton
-              label="Dismiss"
-              tone="secondary"
-              disabled={props.pendingId === frame.id}
-              onClick={() => void props.onDismiss(frame)}
-            />
+        <div className="space-y-3 px-4 pb-3 sm:px-6">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            {frame.summary ?? judgmentLine(frame, "ambient")}
+          </p>
+          <div className="flex items-center gap-3">
+            {href ? (
+              <a
+                href={href}
+                className="text-xs font-medium underline underline-offset-2 text-muted-foreground hover:text-foreground"
+              >
+                {primaryLinkLabel(frame)}
+              </a>
+            ) : null}
+            {activityLink ? (
+              <a
+                href={activityLink}
+                className="text-xs font-medium underline underline-offset-2 text-muted-foreground hover:text-foreground"
+              >
+                Open activity
+              </a>
+            ) : null}
+            <span className="ml-auto text-xs uppercase tracking-[0.16em] text-muted-foreground/60">
+              Awareness only
+            </span>
           </div>
         </div>
       ) : null}
@@ -1093,15 +1494,13 @@ function AmbientRow(props: {
 }
 
 function AmbientLane(props: {
+  snapshot: AttentionSnapshot;
   rows: DisplayFrame[];
   snapshotUpdatedAt: string;
   companyPrefix: string | null | undefined;
-  pendingId: string | null;
-  onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
-  onDismiss: (frame: StoredAttentionFrame) => Promise<void>;
 }) {
   return (
-    <section style={{ borderWidth: 1, borderColor: "var(--border)", opacity: 0.85 }} className="bg-card">
+    <section style={{ borderWidth: 1, borderColor: "var(--border)" }} className="bg-card" aria-label="Ambient attention">
       <div style={{ borderBottomWidth: 1, borderBottomColor: "var(--border)" }} className="px-4 py-2.5 sm:px-6">
         <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground" style={{ opacity: 0.6 }}>Ambient</h2>
       </div>
@@ -1115,11 +1514,9 @@ function AmbientLane(props: {
           <AmbientRow
             key={row.frame.id}
             frame={row.frame}
+            snapshot={props.snapshot}
             snapshotUpdatedAt={props.snapshotUpdatedAt}
             companyPrefix={props.companyPrefix}
-            pendingId={props.pendingId}
-            onAcknowledge={props.onAcknowledge}
-            onDismiss={props.onDismiss}
           />
         ))
       )}
@@ -1134,21 +1531,15 @@ function AmbientLane(props: {
 export function DashboardWidget(props: PluginWidgetProps) {
   const companyId = props.context.companyId;
   const brand = currentSurfaceBrand();
-  const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
-  const approvalsQuery = usePendingApprovals(companyId);
-  useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
-  const merged = useMemo(
-    () => companyId ? mergeSnapshotWithApprovals(summaryQuery.data, companyId, approvalsQuery.data) : null,
-    [summaryQuery.data, approvalsQuery.data, companyId],
-  );
-  const loading = summaryQuery.loading || approvalsQuery.loading;
-  const error = summaryQuery.error ?? approvalsQuery.error;
-  const data = merged;
+  const model = useAttentionModel(companyId);
+  const data = model.snapshot;
+  const loading = model.loading;
+  const error = model.error;
 
-  if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Open a company to see {brand.wordmark}.</div>;
-  if (loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">{brand.loadingLabel}</div>;
-  if (error) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Plugin error: {error.message}</div>;
-  if (!data) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">{brand.headingEmptyState}</div>;
+  if (!companyId) return <MessageCard title={`Open ${brand.wordmark}`} body={`Open a company to see ${brand.wordmark}.`} />;
+  if (loading) return <WidgetLoadingState label={brand.loadingLabel} />;
+  if (error) return <MessageCard title="Plugin error" body={error.message} />;
+  if (!data) return <MessageCard title={brand.wordmark} body={brand.headingEmptyState} />;
 
   const posture = postureForSnapshot(data);
 
@@ -1160,6 +1551,7 @@ export function DashboardWidget(props: PluginWidgetProps) {
           <div className="flex items-end gap-2">
             <Accent className="font-semibold tracking-[0.04em]">{brand.wordmark}</Accent>
             <Accent className="text-[11px]">{posture.label}</Accent>
+            {unreadCount(data) > 0 ? <Accent className="text-[11px]">new {unreadCount(data)}</Accent> : null}
           </div>
           <div className="mt-0.5 text-[10px] leading-none text-muted-foreground/60">{brand.supportCopy}</div>
         </div>
@@ -1185,14 +1577,10 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
   const brand = currentSurfaceBrand();
   const href = pluginPagePath(context.companyPrefix);
   const isActive = typeof window !== "undefined" && window.location.pathname === href;
-  const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
-  const approvalsQuery = usePendingApprovals(companyId);
-  useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
-  const merged = useMemo(
-    () => companyId ? mergeSnapshotWithApprovals(summaryQuery.data, companyId, approvalsQuery.data) : null,
-    [summaryQuery.data, approvalsQuery.data, companyId],
-  );
+  const model = useAttentionModel(companyId);
+  const merged = model.snapshot;
   const actionable = merged ? actionableCount(merged) : 0;
+  const unread = unreadCount(merged);
 
   return (
     <a
@@ -1225,9 +1613,9 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
         </svg>
       </span>
       <span className="flex-1 truncate">{brand.wordmark}</span>
-      {actionable > 0 ? (
+      {(unread > 0 || actionable > 0) ? (
         <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
-          {actionable}
+          {unread > 0 ? unread : actionable}
         </span>
       ) : null}
     </a>
@@ -1241,20 +1629,16 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
 export function AttentionPage(props: PluginPageProps) {
   const companyId = props.context.companyId;
   const brand = currentSurfaceBrand();
-  const summaryQuery = usePluginData<AttentionSnapshot>("attention-summary", { companyId });
-  const approvalsQuery = usePendingApprovals(companyId);
-  useAttentionPolling(companyId, [summaryQuery.refresh, approvalsQuery.refresh]);
-  const snapshot = useMemo(
-    () => companyId ? mergeSnapshotWithApprovals(summaryQuery.data, companyId, approvalsQuery.data) : null,
-    [summaryQuery.data, approvalsQuery.data, companyId],
-  );
-  const loading = summaryQuery.loading || approvalsQuery.loading;
-  const error = summaryQuery.error ?? approvalsQuery.error;
-  const refresh = summaryQuery.refresh;
+  const model = useAttentionModel(companyId);
+  const snapshot = model.snapshot;
+  const loading = model.loading;
+  const error = model.error;
   const acknowledge = usePluginAction("acknowledge-frame");
-  const dismiss = usePluginAction("dismiss-frame");
+  const commentOnIssue = usePluginAction("comment-on-issue");
+  const recordApprovalResponse = usePluginAction("record-approval-response");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [statusOverride, setStatusOverride] = useState<string | null>(null);
+  const [localSuppressions, setLocalSuppressions] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!statusOverride) return;
@@ -1268,44 +1652,90 @@ export function AttentionPage(props: PluginPageProps) {
     };
   }, [statusOverride]);
 
-  const posture = useMemo(() => (snapshot ? postureForSnapshot(snapshot) : null), [snapshot]);
+  const persistedSuppressions = useMemo(
+    () => suppressionMapFromReview(model.review),
+    [model.review],
+  );
+  const effectiveSuppressions = useMemo(
+    () => ({ ...persistedSuppressions, ...localSuppressions }),
+    [persistedSuppressions, localSuppressions],
+  );
+  const displaySnapshot = useMemo(
+    () => applyLocalSuppressions(snapshot, effectiveSuppressions),
+    [snapshot, effectiveSuppressions],
+  );
+  const backgroundErrorMessage = displaySnapshot && error ? `Sync issue: ${error.message}` : null;
+  const posture = useMemo(() => (displaySnapshot ? postureForSnapshot(displaySnapshot) : null), [displaySnapshot]);
   const nextRows = useMemo(
-    () => (snapshot ? snapshot.queued.map((frame) => ({ frame, lane: "queued" as const })) : []),
-    [snapshot],
+    () => (displaySnapshot ? displaySnapshot.queued.map((frame) => ({ frame, lane: "queued" as const })) : []),
+    [displaySnapshot],
   );
   const ambientRows = useMemo(
-    () => (snapshot ? snapshot.ambient.map((frame) => ({ frame, lane: "ambient" as const })) : []),
-    [snapshot],
+    () => (displaySnapshot ? displaySnapshot.ambient.map((frame) => ({ frame, lane: "ambient" as const })) : []),
+    [displaySnapshot],
   );
+  const nextMovement = useQueueMovement(nextRows.map((row) => row.frame));
+
+  useEffect(() => {
+    if (!snapshot) return;
+
+    setLocalSuppressions((current) => {
+      const nextEntries = Object.entries(current).filter(([taskId, suppressedAt]) => {
+        const frames = [
+          ...(snapshot.active ? [snapshot.active] : []),
+          ...snapshot.queued,
+          ...snapshot.ambient,
+        ];
+        const matching = frames.filter((frame) => frame.taskId === taskId);
+        if (matching.length === 0 && persistedSuppressions[taskId]) return false;
+        if (matching.length === 0) return false;
+        return matching.some((frame) => frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(suppressedAt) <= 0);
+      });
+
+      if (nextEntries.length === Object.keys(current).length) return current;
+      return Object.fromEntries(nextEntries);
+    });
+  }, [snapshot, persistedSuppressions]);
 
   function nudgeRefresh() {
-    refresh();
-    approvalsQuery.refresh();
-    window.setTimeout(() => refresh(), 500);
-    window.setTimeout(() => approvalsQuery.refresh(), 500);
+    model.refresh();
+    window.setTimeout(() => model.refresh(), 500);
   }
 
   async function acknowledgeFrame(frame: StoredAttentionFrame) {
     setPendingId(frame.id);
+    const suppressedAt = new Date().toISOString();
+    setLocalSuppressions((current) => ({ ...current, [frame.taskId]: suppressedAt }));
     try {
       await acknowledge({ companyId, taskId: frame.taskId, interactionId: frame.interactionId });
-      setStatusOverride(`Acknowledged ${compactTitle(frame)}.`);
+      setStatusOverride(acknowledgeSuccessMessage(compactTitle(frame)));
       nudgeRefresh();
     } catch (actionError) {
-      setStatusOverride(actionError instanceof Error ? actionError.message : "Failed to acknowledge frame.");
+      setLocalSuppressions((current) => {
+        const next = { ...current };
+        delete next[frame.taskId];
+        return next;
+      });
+      setStatusOverride(acknowledgeFailureMessage(actionError));
     } finally {
       setPendingId(null);
     }
   }
 
-  async function dismissFrame(frame: StoredAttentionFrame) {
+  async function commentOnIssueFrame(frame: StoredAttentionFrame, body: string) {
+    const issueId = entityIdFromFrame(frame);
+    if (!companyId || !issueId || entityTypeFromFrame(frame) !== "issue") {
+      setStatusOverride(issueFrameUnsupportedMessage());
+      return;
+    }
+
     setPendingId(frame.id);
     try {
-      await dismiss({ companyId, taskId: frame.taskId, interactionId: frame.interactionId });
-      setStatusOverride(`Dismissed ${compactTitle(frame)}.`);
+      await commentOnIssue({ companyId, taskId: frame.taskId, issueId, body });
+      setStatusOverride(commentSuccessMessage(compactTitle(frame)));
       nudgeRefresh();
     } catch (actionError) {
-      setStatusOverride(actionError instanceof Error ? actionError.message : "Failed to dismiss frame.");
+      setStatusOverride(commentFailureMessage(actionError));
     } finally {
       setPendingId(null);
     }
@@ -1314,29 +1744,39 @@ export function AttentionPage(props: PluginPageProps) {
   async function submitApprovalDecision(frame: StoredAttentionFrame, decision: "approve" | "reject") {
     const approvalId = approvalIdForFrame(frame);
     if (!approvalId) {
-      setStatusOverride("This frame is not backed by a Paperclip approval.");
+      setStatusOverride(approvalFrameUnsupportedMessage());
       return;
     }
 
     setPendingId(frame.id);
+    const suppressedAt = new Date().toISOString();
+    setLocalSuppressions((current) => ({ ...current, [frame.taskId]: suppressedAt }));
     try {
       const actionPath = decision === "approve" ? "approve" : "reject";
-      const response = await window.fetch(`/api/approvals/${approvalId}/${actionPath}`, {
+      await paperclipApiFetch(`/api/approvals/${approvalId}/${actionPath}`, {
         method: "POST",
-        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({}),
+        expectJson: false,
       });
-      if (!response.ok) {
-        throw new Error(`Approval ${actionPath} failed (${response.status}).`);
-      }
+      await recordApprovalResponse({
+        companyId,
+        taskId: frame.taskId,
+        interactionId: frame.interactionId,
+        decision,
+      });
 
-      setStatusOverride(`${decision === "approve" ? "Approved" : "Rejected"} ${compactTitle(frame)}.`);
+      setStatusOverride(approvalDecisionSuccessMessage(compactTitle(frame), decision));
       nudgeRefresh();
     } catch (actionError) {
-      setStatusOverride(actionError instanceof Error ? actionError.message : "Failed to submit approval decision.");
+      setLocalSuppressions((current) => {
+        const next = { ...current };
+        delete next[frame.taskId];
+        return next;
+      });
+      setStatusOverride(approvalDecisionFailureMessage(actionError));
     } finally {
       setPendingId(null);
     }
@@ -1345,74 +1785,93 @@ export function AttentionPage(props: PluginPageProps) {
   async function requestApprovalRevision(frame: StoredAttentionFrame) {
     const approvalId = approvalIdForFrame(frame);
     if (!approvalId) {
-      setStatusOverride("This frame is not backed by a Paperclip approval.");
+      setStatusOverride(approvalFrameUnsupportedMessage());
       return;
     }
 
     setPendingId(frame.id);
+    const suppressedAt = new Date().toISOString();
+    setLocalSuppressions((current) => ({ ...current, [frame.taskId]: suppressedAt }));
     try {
-      const response = await window.fetch(`/api/approvals/${approvalId}/request-revision`, {
+      await paperclipApiFetch(`/api/approvals/${approvalId}/request-revision`, {
         method: "POST",
-        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({}),
+        expectJson: false,
       });
-      if (!response.ok) {
-        throw new Error(`Approval request-revision failed (${response.status}).`);
-      }
+      await recordApprovalResponse({
+        companyId,
+        taskId: frame.taskId,
+        interactionId: frame.interactionId,
+        decision: "request-revision",
+      });
 
-      setStatusOverride(`Requested revision for ${compactTitle(frame)}.`);
+      setStatusOverride(approvalRevisionSuccessMessage(compactTitle(frame)));
       nudgeRefresh();
     } catch (actionError) {
-      setStatusOverride(actionError instanceof Error ? actionError.message : "Failed to request approval revision.");
+      setLocalSuppressions((current) => {
+        const next = { ...current };
+        delete next[frame.taskId];
+        return next;
+      });
+      setStatusOverride(approvalRevisionFailureMessage(actionError));
     } finally {
       setPendingId(null);
     }
   }
 
-  if (!companyId) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Select a company to open {brand.wordmark}.</div>;
-  if (!snapshot && loading) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Loading attention center{"\u2026"}</div>;
-  if (!snapshot && error) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">Plugin error: {error.message}</div>;
-  if (!snapshot || !posture) return <div className="border border-border bg-card p-4 shadow-sm text-sm text-muted-foreground">No {brand.key === "focus" ? "focus" : "attention"} state has been captured for this company yet.</div>;
+  if (!companyId) return <MessageCard title={`Open ${brand.wordmark}`} body={`Select a company to open ${brand.wordmark}.`} />;
+  if (!displaySnapshot && loading) return <PageLoadingState label="Loading attention center" />;
+  if (!displaySnapshot && error) return <MessageCard title="Plugin error" body={error.message} />;
+  if (!displaySnapshot || !posture) {
+    return (
+      <MessageCard
+        title={`No ${brand.wordmark} State Yet`}
+        body={`No ${brand.key === "focus" ? "focus" : "attention"} state has been captured for this company yet.`}
+      />
+    );
+  }
 
   return (
     <div className="space-y-5">
       <NowPane
-        snapshot={snapshot}
+        snapshot={displaySnapshot}
         posture={posture}
         brand={brand}
         companyPrefix={props.context.companyPrefix}
-        counts={snapshot.counts}
+        counts={displaySnapshot.counts}
         pendingId={pendingId}
         onApprove={(frame) => submitApprovalDecision(frame, "approve")}
         onReject={(frame) => submitApprovalDecision(frame, "reject")}
         onRequestRevision={requestApprovalRevision}
         onAcknowledge={acknowledgeFrame}
-        onDismiss={dismissFrame}
+        onComment={commentOnIssueFrame}
       />
 
       <NextLane
+        snapshot={displaySnapshot}
         rows={nextRows}
-        snapshotUpdatedAt={snapshot.updatedAt}
+        movement={nextMovement}
+        snapshotUpdatedAt={displaySnapshot.updatedAt}
         companyPrefix={props.context.companyPrefix}
         pendingId={pendingId}
         onApprove={(frame) => submitApprovalDecision(frame, "approve")}
         onReject={(frame) => submitApprovalDecision(frame, "reject")}
         onRequestRevision={requestApprovalRevision}
         onAcknowledge={acknowledgeFrame}
-        onDismiss={dismissFrame}
+        onComment={commentOnIssueFrame}
       />
 
       <AmbientLane
+        snapshot={displaySnapshot}
         rows={ambientRows}
-        snapshotUpdatedAt={snapshot.updatedAt}
+        snapshotUpdatedAt={displaySnapshot.updatedAt}
         companyPrefix={props.context.companyPrefix}
-        pendingId={pendingId}
-        onAcknowledge={acknowledgeFrame}
-        onDismiss={dismissFrame}
       />
+
+      <StatusToast message={statusOverride ?? backgroundErrorMessage} />
     </div>
   );
 }

@@ -1,5 +1,22 @@
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import type { ApertureEvent, SourceRef, TaskStatus } from "@tomismeta/aperture-core";
+import {
+  approvalBlockingSummary,
+  approvalBlockingWhyNow,
+  pendingApprovalEventSummary,
+  pendingApprovalEventTitle,
+  pendingApprovalEventWhyNow,
+  runFailedSummary,
+  runFailedWhyNow,
+} from "./attention-language.js";
+import {
+  approvalTypeItem,
+  budgetReasonItem,
+  decisionContextItem,
+  humanizeToken as contextHumanizeToken,
+  linkedIssuesItem,
+  requestedAmountItem,
+} from "./attention-context.js";
 
 type ExtendedPluginEventType =
   | PluginEvent["eventType"]
@@ -27,16 +44,8 @@ function readPayloadString(payload: unknown, key: string): string | undefined {
   return readString((payload as Record<string, unknown>)[key]);
 }
 
-function humanizeToken(value: string): string {
-  return value
-    .split(/[_\-.]/g)
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function humanizeApprovalType(value: string | undefined): string | undefined {
-  return value ? humanizeToken(value) : undefined;
+  return value ? contextHumanizeToken(value) : undefined;
 }
 
 function makeTaskId(event: MappablePluginEvent): string {
@@ -138,8 +147,8 @@ function issueDisplayTitle(event: MappablePluginEvent, fallback: string): string
   const identifier = readPayloadString(event.payload, "identifier");
   const issueTitle = readPayloadString(event.payload, "issueTitle") ?? readPayloadString(event.payload, "title");
 
-  if (identifier && issueTitle) return `${identifier}  ${issueTitle}`;
-  if (identifier) return `${identifier}  ${fallback}`;
+  if (identifier && issueTitle) return `${identifier} ${issueTitle}`;
+  if (identifier) return `${identifier} ${fallback}`;
   if (issueTitle) return issueTitle;
   return fallback;
 }
@@ -170,55 +179,25 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         title: approvalTitle(event),
         summary:
           readPayloadString(event.payload, "summary")
-          ?? (budgetOverride
-            ? "Budget controls are blocking work until a board decision lands."
-            : "A board decision is blocking work in Paperclip."),
+          ?? approvalBlockingSummary(budgetOverride),
         consequence: budgetOverride ? "high" : "medium",
         tone: "focused",
         request: { kind: "approval" },
         context: {
           items: [
             ...(humanizeApprovalType(type)
-              ? [{
-                  id: "approval-type",
-                  label: "Type",
-                  value: humanizeApprovalType(type),
-                }]
+              ? [approvalTypeItem(humanizeApprovalType(type) as string)]
               : []),
-            ...(requestedAmount
-              ? [{
-                  id: "requested-amount",
-                  label: "Requested amount",
-                  value: requestedAmount,
-                }]
-              : []),
-            ...(reason
-              ? [{
-                  id: "budget-reason",
-                  label: "Reason",
-                  value: reason,
-                }]
-              : []),
-            ...(decisionContext
-              ? [{
-                  id: "decision-context",
-                  label: "Decision context",
-                  value: decisionContext,
-                }]
-              : []),
+            ...(requestedAmount ? [requestedAmountItem(requestedAmount)] : []),
+            ...(reason ? [budgetReasonItem(reason)] : []),
+            ...(decisionContext ? [decisionContextItem(decisionContext)] : []),
             ...(readStringArrayLength(event.payload, "issueIds")
-              ? [{
-                  id: "linked-issues",
-                  label: "Linked issues",
-                  value: String(readStringArrayLength(event.payload, "issueIds")),
-                }]
+              ? [linkedIssuesItem(String(readStringArrayLength(event.payload, "issueIds")))]
               : []),
           ],
         },
         provenance: {
-          whyNow: budgetOverride
-            ? "Budget controls are blocking work until a board decision lands."
-            : "Paperclip is waiting on a human approval before work can continue.",
+          whyNow: approvalBlockingWhyNow(budgetOverride),
           factors: budgetOverride
             ? ["budget stop", "approval", "operator decision"]
             : ["approval", "operator decision"],
@@ -322,12 +301,12 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         toolFamily: "paperclip",
         activityClass: "tool_failure",
         title: readPayloadString(event.payload, "title") ?? "Agent run failed",
-        summary: readPayloadString(event.payload, "summary") ?? "An agent run failed and may need operator attention.",
+        summary: readPayloadString(event.payload, "summary") ?? runFailedSummary(),
         consequence: "high",
         tone: "critical",
         request: { kind: "approval" },
         provenance: {
-          whyNow: "A Paperclip-managed run failed and is now competing for operator attention.",
+          whyNow: runFailedWhyNow(),
           factors: ["run failed", "operator review"],
         },
       };
@@ -364,13 +343,13 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           source,
           toolFamily: "paperclip",
           activityClass: "permission_request",
-          title: "Agent waiting for approval",
-          summary: "A Paperclip-managed agent cannot continue until a pending approval is resolved.",
+          title: pendingApprovalEventTitle(),
+          summary: pendingApprovalEventSummary(),
           consequence: "medium",
           tone: "focused",
           request: { kind: "approval" },
           provenance: {
-            whyNow: "The agent is paused behind a Paperclip approval gate.",
+            whyNow: pendingApprovalEventWhyNow(),
             factors: ["pending approval"],
           },
         };
