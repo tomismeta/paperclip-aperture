@@ -1,5 +1,6 @@
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
-import type { ApertureEvent, SourceRef, TaskStatus } from "@tomismeta/aperture-core";
+import type { ApertureEvent, SourceEvent, SourceRef, TaskStatus } from "@tomismeta/aperture-core";
+import { interpretSourceEvent } from "@tomismeta/aperture-core/semantic";
 import {
   approvalBlockingSummary,
   approvalBlockingWhyNow,
@@ -37,6 +38,12 @@ function readStringArrayLength(payload: unknown, key: string): number | undefine
   if (!payload || typeof payload !== "object") return undefined;
   const value = (payload as Record<string, unknown>)[key];
   return Array.isArray(value) ? value.length : undefined;
+}
+
+function readStringArray(payload: unknown, key: string): string[] | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const value = (payload as Record<string, unknown>)[key];
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : undefined;
 }
 
 function readPayloadString(payload: unknown, key: string): string | undefined {
@@ -153,6 +160,62 @@ function issueDisplayTitle(event: MappablePluginEvent, fallback: string): string
   return fallback;
 }
 
+function issueRelationTarget(issueId: string): string {
+  return `issue:${issueId}`;
+}
+
+function relationHintsForIssueTargets(issueIds: string[] | undefined): SourceEvent["semanticHints"] | undefined {
+  if (!issueIds || issueIds.length === 0) return undefined;
+
+  return {
+    relationHints: issueIds.map((issueId) => ({
+      kind: "same_issue" as const,
+      target: issueRelationTarget(issueId),
+    })),
+  };
+}
+
+function issueSemanticHints(event: MappablePluginEvent): SourceEvent["semanticHints"] | undefined {
+  return event.entityType === "issue" && event.entityId
+    ? relationHintsForIssueTargets([event.entityId])
+    : undefined;
+}
+
+function approvalSemanticHints(
+  budgetOverride: boolean,
+  linkedIssueIds: string[] | undefined,
+): SourceEvent["semanticHints"] {
+  return {
+    confidence: "high",
+    whyNow: approvalBlockingWhyNow(budgetOverride),
+    factors: budgetOverride
+      ? ["budget stop", "approval", "operator decision"]
+      : ["approval", "operator decision"],
+    ...(relationHintsForIssueTargets(linkedIssueIds) ?? {}),
+  };
+}
+
+function pendingApprovalSemanticHints(): SourceEvent["semanticHints"] {
+  return {
+    confidence: "high",
+    whyNow: pendingApprovalEventWhyNow(),
+    factors: ["pending approval"],
+  };
+}
+
+function runFailureSemanticHints(): SourceEvent["semanticHints"] {
+  return {
+    intentFrame: "failure",
+    confidence: "high",
+    whyNow: runFailedWhyNow(),
+    factors: ["run failed", "operator review"],
+  };
+}
+
+function interpretEventSemantic(event: SourceEvent): ApertureEvent["semantic"] {
+  return interpretSourceEvent(event);
+}
+
 export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEvent | null {
   const eventType = event.eventType;
   const taskId = makeTaskId(event);
@@ -166,6 +229,26 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         const requestedAmount = readPayloadString(event.payload, "requestedAmount");
         const reason = readPayloadString(event.payload, "reason");
         const decisionContext = readPayloadString(event.payload, "decisionContext");
+        const linkedIssueIds = readStringArray(event.payload, "issueIds");
+        const title = approvalTitle(event);
+        const summary =
+          readPayloadString(event.payload, "summary")
+          ?? approvalBlockingSummary(budgetOverride);
+        const semantic = interpretEventSemantic({
+          id: `${event.eventId}:approval`,
+          type: "human.input.requested",
+          taskId,
+          interactionId: `${taskId}:approval`,
+          timestamp: event.occurredAt,
+          source,
+          toolFamily: "paperclip",
+          activityClass: "permission_request",
+          title,
+          summary,
+          request: { kind: "approval" },
+          riskHint: budgetOverride ? "high" : "medium",
+          semanticHints: approvalSemanticHints(budgetOverride, linkedIssueIds),
+        });
 
       return {
         id: `${event.eventId}:approval`,
@@ -176,13 +259,12 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         source,
         toolFamily: "paperclip",
         activityClass: "permission_request",
-        title: approvalTitle(event),
-        summary:
-          readPayloadString(event.payload, "summary")
-          ?? approvalBlockingSummary(budgetOverride),
+        title,
+        summary,
         consequence: budgetOverride ? "high" : "medium",
         tone: "focused",
         request: { kind: "approval" },
+        semantic,
         context: {
           items: [
             ...(humanizeApprovalType(type)
@@ -191,8 +273,8 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
             ...(requestedAmount ? [requestedAmountItem(requestedAmount)] : []),
             ...(reason ? [budgetReasonItem(reason)] : []),
             ...(decisionContext ? [decisionContextItem(decisionContext)] : []),
-            ...(readStringArrayLength(event.payload, "issueIds")
-              ? [linkedIssuesItem(String(readStringArrayLength(event.payload, "issueIds")))]
+            ...(linkedIssueIds?.length
+              ? [linkedIssuesItem(String(linkedIssueIds.length))]
               : []),
           ],
         },
@@ -227,57 +309,116 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
       };
 
     case "issue.created":
-      return inferIssueStatus(event.payload) === "running"
-        ? {
-            id: `${event.eventId}:issue-created`,
-            type: "task.started",
-            taskId,
-            timestamp: event.occurredAt,
-            source,
-            title: issueDisplayTitle(event, "Issue created"),
-            summary: readPayloadString(event.payload, "description") ?? "A new issue entered Paperclip.",
-          }
-        : {
-            id: `${event.eventId}:issue-created-status`,
-            type: "task.updated",
-            taskId,
-            timestamp: event.occurredAt,
-            source,
-            title: issueDisplayTitle(event, "Issue created"),
-            summary: readPayloadString(event.payload, "description") ?? "A new issue entered Paperclip.",
-            activityClass: "status_update",
-            status: inferIssueStatus(event.payload),
-          };
+      {
+        const title = issueDisplayTitle(event, "Issue created");
+        const summary = readPayloadString(event.payload, "description") ?? "A new issue entered Paperclip.";
+        const status = inferIssueStatus(event.payload);
+        return status === "running"
+          ? {
+              id: `${event.eventId}:issue-created`,
+              type: "task.started",
+              taskId,
+              timestamp: event.occurredAt,
+              source,
+              title,
+              summary,
+              semantic: interpretEventSemantic({
+                id: `${event.eventId}:issue-created`,
+                type: "task.started",
+                taskId,
+                timestamp: event.occurredAt,
+                source,
+                title,
+                summary,
+                semanticHints: issueSemanticHints(event),
+              }),
+            }
+          : {
+              id: `${event.eventId}:issue-created-status`,
+              type: "task.updated",
+              taskId,
+              timestamp: event.occurredAt,
+              source,
+              title,
+              summary,
+              activityClass: "status_update",
+              status,
+              semantic: interpretEventSemantic({
+                id: `${event.eventId}:issue-created-status`,
+                type: "task.updated",
+                taskId,
+                timestamp: event.occurredAt,
+                source,
+                title,
+                summary,
+                activityClass: "status_update",
+                status,
+                semanticHints: issueSemanticHints(event),
+              }),
+            };
+      }
 
-    case "issue.updated":
+    case "issue.updated": {
+      const title = issueDisplayTitle(event, "Issue updated");
+      const summary = readPayloadString(event.payload, "summary") ?? readPayloadString(event.payload, "description");
+      const status = inferIssueStatus(event.payload);
       return {
         id: `${event.eventId}:issue-updated`,
         type: "task.updated",
         taskId,
         timestamp: event.occurredAt,
         source,
-        title: issueDisplayTitle(event, "Issue updated"),
-        summary: readPayloadString(event.payload, "summary") ?? readPayloadString(event.payload, "description"),
+        title,
+        summary,
         activityClass: "status_update",
-        status: inferIssueStatus(event.payload),
+        status,
+        semantic: interpretEventSemantic({
+          id: `${event.eventId}:issue-updated`,
+          type: "task.updated",
+          taskId,
+          timestamp: event.occurredAt,
+          source,
+          title,
+          ...(summary !== undefined ? { summary } : {}),
+          activityClass: "status_update",
+          status,
+          semanticHints: issueSemanticHints(event),
+        }),
       };
+    }
 
     case "issue.comment.created":
-    case "issue.comment_added":
+    case "issue.comment_added": {
+      const title = issueDisplayTitle(event, "Issue comment");
+      const summary =
+        readPayloadString(event.payload, "bodySnippet")
+        ?? "A comment added new context in Paperclip.";
+      const status = inferIssueStatus(event.payload);
       return {
         id: `${event.eventId}:issue-comment`,
         type: "task.updated",
         taskId,
         timestamp: event.occurredAt,
         source,
-        title: issueDisplayTitle(event, "Issue comment"),
-        summary:
-          readPayloadString(event.payload, "bodySnippet")
-          ?? "A comment added new context in Paperclip.",
+        title,
+        summary,
         activityClass: "follow_up",
-        status: inferIssueStatus(event.payload),
+        status,
         progress: undefined,
+        semantic: interpretEventSemantic({
+          id: `${event.eventId}:issue-comment`,
+          type: "task.updated",
+          taskId,
+          timestamp: event.occurredAt,
+          source,
+          title,
+          summary,
+          activityClass: "follow_up",
+          status,
+          semanticHints: issueSemanticHints(event),
+        }),
       };
+    }
 
     case "agent.run.started":
       return {
@@ -291,7 +432,10 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
       };
 
     case "agent.run.failed":
-      return {
+      {
+        const title = readPayloadString(event.payload, "title") ?? "Agent run failed";
+        const summary = readPayloadString(event.payload, "summary") ?? runFailedSummary();
+        return {
         id: `${event.eventId}:run-failed`,
         type: "human.input.requested",
         taskId,
@@ -300,16 +444,32 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         source,
         toolFamily: "paperclip",
         activityClass: "tool_failure",
-        title: readPayloadString(event.payload, "title") ?? "Agent run failed",
-        summary: readPayloadString(event.payload, "summary") ?? runFailedSummary(),
+        title,
+        summary,
         consequence: "high",
         tone: "critical",
         request: { kind: "approval" },
+        semantic: interpretEventSemantic({
+          id: `${event.eventId}:run-failed`,
+          type: "human.input.requested",
+          taskId,
+          interactionId: `${taskId}:run-failed`,
+          timestamp: event.occurredAt,
+          source,
+          toolFamily: "paperclip",
+          activityClass: "tool_failure",
+          title,
+          summary,
+          request: { kind: "approval" },
+          riskHint: "high",
+          semanticHints: runFailureSemanticHints(),
+        }),
         provenance: {
           whyNow: runFailedWhyNow(),
           factors: ["run failed", "operator review"],
         },
       };
+      }
 
     case "agent.run.finished":
       return {
@@ -334,6 +494,8 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
     case "agent.status_changed": {
       const status = readPayloadString(event.payload, "status")?.toLowerCase();
       if (status === "pending_approval") {
+        const title = pendingApprovalEventTitle();
+        const summary = pendingApprovalEventSummary();
         return {
           id: `${event.eventId}:status-pending-approval`,
           type: "human.input.requested",
@@ -343,11 +505,26 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           source,
           toolFamily: "paperclip",
           activityClass: "permission_request",
-          title: pendingApprovalEventTitle(),
-          summary: pendingApprovalEventSummary(),
+          title,
+          summary,
           consequence: "medium",
           tone: "focused",
           request: { kind: "approval" },
+          semantic: interpretEventSemantic({
+            id: `${event.eventId}:status-pending-approval`,
+            type: "human.input.requested",
+            taskId,
+            interactionId: `${taskId}:pending-approval`,
+            timestamp: event.occurredAt,
+            source,
+            toolFamily: "paperclip",
+            activityClass: "permission_request",
+            title,
+            summary,
+            request: { kind: "approval" },
+            riskHint: "medium",
+            semanticHints: pendingApprovalSemanticHints(),
+          }),
           provenance: {
             whyNow: pendingApprovalEventWhyNow(),
             factors: ["pending approval"],
@@ -355,16 +532,30 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         };
       }
 
+      const normalizedStatus = inferAgentStatus(event.payload);
+      const title = "Agent status changed";
+      const summary = status ? `Agent status is now ${status}.` : "Agent status changed.";
       return {
         id: `${event.eventId}:status-updated`,
         type: "task.updated",
         taskId,
         timestamp: event.occurredAt,
         source,
-        title: "Agent status changed",
-        summary: status ? `Agent status is now ${status}.` : "Agent status changed.",
+        title,
+        summary,
         activityClass: "session_status",
-        status: inferAgentStatus(event.payload),
+        status: normalizedStatus,
+        semantic: interpretEventSemantic({
+          id: `${event.eventId}:status-updated`,
+          type: "task.updated",
+          taskId,
+          timestamp: event.occurredAt,
+          source,
+          title,
+          summary,
+          activityClass: "session_status",
+          status: normalizedStatus,
+        }),
       };
     }
 

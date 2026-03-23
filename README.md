@@ -79,7 +79,7 @@ This plugin treats Paperclip as the host runtime and UI shell, while embedding [
 
 It is a pure SDK integration: Aperture Core is used as-is inside a self-contained Paperclip plugin, with no changes to Aperture Core or Paperclip core.
 
-For `0.2.0`, the boundary works like this:
+For `0.2.x`, the boundary works like this:
 
 - the plugin worker owns Aperture ingestion, replay, review state, and display composition
 - Paperclip remains the system of record for issue and approval writes
@@ -87,7 +87,7 @@ For `0.2.0`, the boundary works like this:
 - the plugin intentionally publishes `ApertureEvent`s today, using a Paperclip-specific semantic mapping layer and ontology, rather than switching fully to `SourceEvent`
 - that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, and shared operator-language generation inside the plugin
 
-The plugin has been validated against [`@tomismeta/aperture-core@0.3.0`](https://www.npmjs.com/package/@tomismeta/aperture-core).
+The plugin has been validated against [`@tomismeta/aperture-core@0.4.0`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
 ## Development
 

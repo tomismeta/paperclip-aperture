@@ -158,6 +158,47 @@ describe("paperclip aperture", () => {
     expect(snapshot.active?.context?.items?.find((item) => item.id === "requested-amount")?.value).toBe("$500");
   });
 
+  it("attaches core semantic payloads and issue relation hints to mapped events", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "budget_override_required",
+        title: "Approve launch budget exception",
+        summary: "Budget controls are blocking launch prep for CAM-9.",
+        issueIds: ["issue-99"],
+      },
+      { companyId: "company-semantic", entityId: "approval-semantic-1", entityType: "approval" },
+    );
+
+    await harness.emit(
+      "issue.comment.created",
+      {
+        identifier: "CAM-9",
+        issueTitle: "Launch prep blocked",
+        bodySnippet: "Can you share the memo with the board so review can continue?",
+        status: "blocked",
+      },
+      { companyId: "company-semantic", entityId: "issue-99", entityType: "issue" },
+    );
+
+    const exported = await harness.getData<AttentionExport>("attention-export", { companyId: "company-semantic" });
+    const approvalEntry = exported.eventEntries.find((entry) => entry.source.eventType === "approval.created");
+    const issueEntry = exported.eventEntries.find((entry) => entry.source.eventType === "issue.comment.created");
+
+    expect(approvalEntry?.apertureEvent.semantic?.confidence).toBe("high");
+    expect(approvalEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
+      kind: "same_issue",
+      target: "issue:issue-99",
+    });
+    expect(issueEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
+      kind: "same_issue",
+      target: "issue:issue-99",
+    });
+  });
+
   it("records approval responses through the plugin action path and clears the frame after restart", async () => {
     const firstHarness = createTestHarness({ manifest });
     await plugin.definition.setup(firstHarness.ctx);
