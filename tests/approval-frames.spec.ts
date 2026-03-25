@@ -71,6 +71,12 @@ describe("approval-frames", () => {
     expect(frame.responseSpec?.kind).toBe("approval");
     expect(frame.consequence).toBe("high");
     expect(frame.context?.items?.find((item) => item.id === "requested-amount")?.value).toBe("$500");
+    expect(frame.metadata?.attention).toEqual({
+      rationale: ["budget stop", "approval", "operator decision"],
+    });
+    expect(frame.metadata?.semantic).toEqual({
+      confidence: "high",
+    });
   });
 
   it("merges fetched approvals into the shared attention model without dropping non-approval frames", () => {

@@ -688,6 +688,16 @@ describe("paperclip aperture", () => {
       "Share the memo with the board so review can continue.",
     );
     expect(snapshot.active?.provenance?.whyNow).toBe("The board still needs the memo before review can continue.");
+    expect(snapshot.active?.metadata?.attention).toEqual({
+      rationale: ["waiting on human", "issue review"],
+    });
+    expect(snapshot.active?.metadata?.semantic).toEqual({
+      confidence: "high",
+      relationHints: [
+        { kind: "same_issue", target: "issue:issue-1" },
+        { kind: "supersedes", target: "issue:issue-1" },
+      ],
+    });
   });
 
   it("downgrades memo-share review requests after a document is attached", async () => {
@@ -731,6 +741,16 @@ describe("paperclip aperture", () => {
       expect(snapshot.ambient[0]?.provenance?.whyNow).toBe(
         "Pricing experiment memo was attached after the request, so the missing artifact appears resolved.",
       );
+      expect(snapshot.ambient[0]?.metadata?.attention).toEqual({
+        rationale: ["document attached", "review can proceed"],
+      });
+      expect(snapshot.ambient[0]?.metadata?.semantic).toEqual({
+        confidence: "high",
+        relationHints: [
+          { kind: "same_issue", target: "issue:issue-1" },
+          { kind: "supersedes", target: "issue:issue-1" },
+        ],
+      });
     } finally {
       vi.useRealTimers();
     }

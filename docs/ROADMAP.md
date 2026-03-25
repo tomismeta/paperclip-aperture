@@ -1,7 +1,7 @@
 # Roadmap and Releasing
 
 This document defines how `paperclip-aperture` should mature from a strong `0.1.x`
-integration into a dependable operator surface.
+integration into a dependable and legible operator surface.
 
 The guiding principle is simple:
 
@@ -42,50 +42,60 @@ These should only happen if we find a clearly reusable SDK need:
 - structured "Why this?" trace export
 - standardized provenance and reasoning surfaces for host integrations
 
+## Current Position
+
+`0.2.x` largely delivered the trustworthy Focus foundation:
+
+- dependable replay and review state
+- stronger issue, approval, and agent semantics
+- richer recommended moves
+- document-aware review downgrade behavior
+- a clearer `now`, `next`, and `ambient` model
+
+The next wedge is no longer basic trust. It is explainability and operator control.
+
 ## Next Feature Set
 
-The next meaningful release should focus on trust and operator usefulness, not just UI polish.
+The next meaningful release should focus on legibility and operator usefulness, not just ranking polish.
 
-### 0.2.x: Trustworthy Focus
+### 0.3.0: Explainable Focus
 
 Goals:
 
-- make `Focus` dependable after restarts and missed events
-- improve non-approval coverage
-- reduce ambiguity about why something is `now`, `next`, or `ambient`
+- make `Focus` more transparent than a styled inbox
+- help operators understand why something is interrupting them or queued behind the active item
+- preserve the fast action surface while making judgment easier to trust
 
 Scope:
 
-- broader backfill/reconciliation beyond approvals
-- stronger blocked/waiting/run-failure semantics
-- deeper links back into Paperclip entities
-- richer operator actions for high-value frames
-- unread/review state or lightweight "new since last seen" model
+- embedded `Why now` and `Why next` surfaces
+- confidence, signals, thread context, and related-activity visibility
+- richer provenance UI that stays attached to the existing Focus cards
+- stronger lane-specific treatments without introducing a separate inspection mode first
 
 Success criteria:
 
-- approvals, issues, and failed runs all feel trustworthy after restart
-- operators can move from `Focus` directly into the underlying Paperclip work
-- a new operator can explain why a frame landed in a given lane
+- an operator can explain why the current item is `now`
+- an operator can explain why a queued item is `next`
+- explainability improves trust without slowing the action loop
 
-### 0.3.x: Explainability and Review
+### 0.3.x: Operator Control and Review
 
 Goals:
 
-- make the plugin more transparent than a styled inbox
-- expose Aperture's reasoning in a way operators can trust
+- give operators more lifecycle control over attention once they trust the queue
+- reduce long-tail noise without weakening the core ranking model
 
 Scope:
 
-- `Why this?` surface
-- richer provenance UI
 - review/mute/snooze patterns
-- stronger lane-specific row treatments
+- stronger retirement behavior for ambient and stale tails
+- tighter review controls on queued and ambient items
 
 Success criteria:
 
-- an operator can inspect why a frame is interrupting them
-- the plugin supports both quick action and thoughtful review
+- operators can shape what stays visible over time
+- the plugin supports both quick action and deliberate queue management
 
 ## Release Checklist
 

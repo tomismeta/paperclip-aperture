@@ -17,6 +17,7 @@ import {
   isBudgetOverride,
   type FrameLane,
 } from "../aperture/frame-model.js";
+import { explainFrame, signalStrengthLabel } from "../aperture/explainability.js";
 import {
   mergeSnapshotWithApprovals,
   type ApprovalRecord,
@@ -874,6 +875,109 @@ function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
   );
 }
 
+function DetailCard(props: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("border border-border bg-secondary/50 px-3 py-2", props.className)}>
+      <div className="text-xs font-medium text-muted-foreground">{props.label}</div>
+      <div className="mt-1">{props.children}</div>
+    </div>
+  );
+}
+
+function ExplainabilityBadges(props: { values: string[]; accent?: boolean }) {
+  if (props.values.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {props.values.map((value) => (
+        <Badge
+          key={value}
+          className={props.accent ? "border-transparent" : "border-border bg-background/70 text-foreground/80"}
+          style={props.accent ? { color: ACCENT_COLOR, backgroundColor: `${ACCENT_COLOR}14`, borderColor: `${ACCENT_COLOR}33` } : undefined}
+        >
+          {value}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function ExplainabilityPanel(props: {
+  frame: StoredAttentionFrame;
+  lane: FrameLane;
+}) {
+  const explanation = explainFrame(props.frame, props.lane);
+  const strength = explanation.signalStrength ? signalStrengthLabel(explanation.signalStrength) : null;
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      <DetailCard label="Why now" className="lg:col-span-2">
+        <p className="text-sm leading-relaxed text-foreground/90">
+          {explanation.whyNow ?? judgmentLine(props.frame, props.lane)}
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          {explanation.laneReason}
+        </p>
+      </DetailCard>
+
+      {strength ? (
+        <DetailCard label="Confidence">
+          <p className="text-sm text-foreground/90">{strength}</p>
+        </DetailCard>
+      ) : null}
+
+      {explanation.continuity ? (
+        <DetailCard label="Related activity">
+          <p className="text-sm leading-relaxed text-foreground/90">{explanation.continuity}</p>
+        </DetailCard>
+      ) : null}
+
+      {explanation.signals.length > 0 ? (
+        <DetailCard label="Signals" className={explanation.relationLabels.length > 0 ? "lg:col-span-1" : "lg:col-span-2"}>
+          <ExplainabilityBadges values={explanation.signals} />
+        </DetailCard>
+      ) : null}
+
+      {explanation.relationLabels.length > 0 ? (
+        <DetailCard label="Thread context" className={explanation.signals.length > 0 ? "lg:col-span-1" : "lg:col-span-2"}>
+          <ExplainabilityBadges values={explanation.relationLabels} accent />
+        </DetailCard>
+      ) : null}
+    </div>
+  );
+}
+
+function ExplainabilityStrip(props: {
+  frame: StoredAttentionFrame;
+  lane: FrameLane;
+}) {
+  const explanation = explainFrame(props.frame, props.lane);
+  const chips = [
+    ...(explanation.signalStrength ? [signalStrengthLabel(explanation.signalStrength)] : []),
+    ...explanation.signals.slice(0, 2),
+    ...explanation.relationLabels.slice(0, 1),
+  ];
+
+  return (
+    <div className="space-y-2 rounded-md border border-border/70 bg-secondary/30 px-3 py-2">
+      <div className="text-xs font-medium text-muted-foreground">
+        {props.lane === "queued" ? "Why next" : props.lane === "ambient" ? "Why ambient" : "Why now"}
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {explanation.whyNow ?? judgmentLine(props.frame, props.lane)}
+      </p>
+      <div className="text-[11px] leading-relaxed text-muted-foreground">
+        {explanation.laneReason}
+      </div>
+      {chips.length > 0 ? <ExplainabilityBadges values={chips} accent /> : null}
+    </div>
+  );
+}
+
 function isIssueFrame(frame: StoredAttentionFrame): boolean {
   return entityTypeFromFrame(frame) === "issue";
 }
@@ -971,16 +1075,14 @@ function NowDetails(props: {
 
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      <div className="border border-border bg-secondary/50 px-3 py-2">
-        <div className="text-xs font-medium text-muted-foreground">Judgment</div>
-        <p className="mt-1 text-sm text-foreground/90">{judgmentLine(frame, "active")}</p>
-        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-          <span>{requestDescriptor(frame)}</span>
-          <span>{impactLabel(frame)}</span>
-          <span>{formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}</span>
-          {requestedAmount(frame) ? <span>Amount requested: {requestedAmount(frame)}</span> : null}
-          {budgetReason(frame) ? <span>{budgetReason(frame)}</span> : null}
-        </div>
+      <ExplainabilityPanel frame={frame} lane="active" />
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span>{requestDescriptor(frame)}</span>
+        <span>{impactLabel(frame)}</span>
+        <span>{formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}</span>
+        {requestedAmount(frame) ? <span>Amount requested: {requestedAmount(frame)}</span> : null}
+        {budgetReason(frame) ? <span>{budgetReason(frame)}</span> : null}
       </div>
 
       <ContextItems frame={frame} />
@@ -1336,6 +1438,7 @@ function NextRow(props: {
               {detailText}
             </p>
           ) : null}
+          <ExplainabilityStrip frame={frame} lane="queued" />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>{impactLabel(frame)}</span>
             {driver ? <Accent>{driver}</Accent> : null}

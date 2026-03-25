@@ -1,4 +1,5 @@
 import type { Agent, Issue, IssueComment, PluginContext, PluginIssuesClient } from "@paperclipai/plugin-sdk";
+import type { SemanticConfidence } from "@tomismeta/aperture-core/semantic";
 import type { AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "./types.js";
 import {
   agentStatusItem,
@@ -34,6 +35,18 @@ import {
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 
 const COMMENT_LOOKUP_CONCURRENCY = 6;
+
+function semanticMetadata(
+  confidence: SemanticConfidence | null,
+  relationHints: IssueIntentAnalysis["relationHints"],
+): Record<string, unknown> | undefined {
+  const semantic = {
+    ...(confidence ? { confidence } : {}),
+    ...(relationHints.length > 0 ? { relationHints } : {}),
+  };
+
+  return Object.keys(semantic).length > 0 ? semantic : undefined;
+}
 
 function toIsoString(value: Date | string | null | undefined): string | undefined {
   if (!value) return undefined;
@@ -135,6 +148,7 @@ function issueFrame(
   const owner = hasIntent(analysis, "resolution") || documentSignal.resolvesArtifactRequest ? null : analysis.owner;
   const move = issueRecommendedMove(issue, analysis, documentSignal);
   const target = analysis.blockingTarget;
+  const semantic = semanticMetadata(analysis.semanticConfidence, analysis.relationHints);
 
   return {
     lane,
@@ -175,6 +189,10 @@ function issueFrame(
         issuePriority: issue.priority,
         liveReconciled: true,
         activityPath: comment ? "activity" : undefined,
+        attention: {
+          rationale: provenance.factors ?? [],
+        },
+        ...(semantic ? { semantic } : {}),
       },
     },
   };
@@ -249,6 +267,12 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
         pauseReason: agent.pauseReason,
         liveReconciled: true,
         activityPath: agent.status === "error" ? "activity" : undefined,
+        attention: {
+          rationale: provenance.factors ?? [],
+        },
+        semantic: {
+          confidence: "high" as const,
+        },
       },
     },
   };

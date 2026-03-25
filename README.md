@@ -64,6 +64,7 @@ and agents                             attention now?    actually sees     to th
 
 - a Focus surface inside Paperclip
 - ranked `now`, `next`, and `ambient` attention lanes
+- embedded explainability in the Focus UI, including `Why now`, `Why next`, confidence, signals, thread context, and related activity
 - approval handling, including budget-specific approval semantics
 - issue-aware operator language such as `review required`, `blocked`, and targeted recommended moves
 - agent-aware routing that distinguishes known company agents from human/operator roles when issue text references them
@@ -75,13 +76,31 @@ and agents                             attention now?    actually sees     to th
 - durable acknowledge/suppression behavior backed by plugin state and ledger replay
 - a sidebar entry, page, and dashboard widget
 
+## Explainability
+
+Focus is meant to be more legible than a smart inbox.
+
+The first `0.3.0` explainability slice keeps reasoning attached to the cards you are already acting on:
+
+- `Why now` on the active card explains why the current item outranks the rest of the queue
+- `Why next` on queued rows explains why something is staged behind the current top item
+- `Confidence` shows how strong the semantic signal is when the plugin has one
+- `Signals` surfaces the specific factors that pushed the item into attention
+- `Thread context` and `Related activity` help explain whether an item is part of a broader episode or continuation
+
+The intent is not to expose every internal scoring detail. It is to help an operator answer:
+
+- why did this surface?
+- why is it in this lane?
+- how much should I trust this judgment?
+
 ## Package Boundary
 
 This plugin treats Paperclip as the host runtime and UI shell, while embedding [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) through the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
 It is a pure SDK integration: Aperture Core is used as-is inside a self-contained Paperclip plugin, with no changes to Aperture Core or Paperclip core.
 
-For `0.2.x`, the boundary works like this:
+For `0.3.x`, the boundary works like this:
 
 - the plugin worker owns Aperture ingestion, replay, review state, and display composition
 - Paperclip remains the system of record for issue and approval writes
@@ -129,6 +148,8 @@ Then open `http://127.0.0.1:3100/APE/aperture` and verify:
 - approval actions update Focus correctly
 - resolved blocker comments downgrade stale `Now` items
 - attached issue documents downgrade stale `share the memo/spec` review blockers into monitor-only follow-up
+- the active card exposes `Why now`
+- expanded queued rows expose `Why next`
 
 ## Links
 

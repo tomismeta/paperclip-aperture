@@ -59,6 +59,12 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
     ? payload.summary
     : approvalBlockingSummary(budgetOverride);
   const updatedAt = record.updatedAt ?? record.createdAt;
+  const provenance = {
+    whyNow: approvalBlockingWhyNow(budgetOverride),
+    factors: budgetOverride
+      ? ["budget stop", "approval", "operator decision"]
+      : ["approval", "operator decision"],
+  };
 
   return {
     id: `approval-bootstrap:${record.id}`,
@@ -95,12 +101,7 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
           : []),
       ],
     },
-    provenance: {
-      whyNow: approvalBlockingWhyNow(budgetOverride),
-      factors: budgetOverride
-        ? ["budget stop", "approval", "operator decision"]
-        : ["approval", "operator decision"],
-    },
+    provenance,
     timing: {
       createdAt: record.createdAt,
       updatedAt,
@@ -108,6 +109,12 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
     metadata: {
       approvalStatus: record.status,
       approvalType: record.type,
+      attention: {
+        rationale: provenance.factors,
+      },
+      semantic: {
+        confidence: "high",
+      },
     },
   };
 }
