@@ -3,7 +3,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "tomismeta.paperclip-aperture",
   apiVersion: 1,
-  version: "0.2.1",
+  version: "0.2.2",
   displayName: "Paperclip Aperture",
   description: "The live attention layer for Paperclip, powered by Aperture's deterministic attention engine.",
   author: "@tomismeta",
@@ -14,6 +14,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "issues.read",
     "issue.comments.read",
     "issue.comments.create",
+    "issue.documents.read",
     "plugin.state.read",
     "plugin.state.write",
     "ui.dashboardWidget.register",

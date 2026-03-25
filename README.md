@@ -68,6 +68,8 @@ and agents                             attention now?    actually sees     to th
 - issue-aware operator language such as `review required`, `blocked`, and targeted recommended moves
 - agent-aware routing that distinguishes known company agents from human/operator roles when issue text references them
 - a plugin-local deterministic semantic mapping layer that interprets Paperclip issue, approval, and agent signals before publishing them into Aperture Core
+- richer semantic continuity hints on mapped issue events, including `supersedes` and `resolves` relationships where Paperclip-specific intent is clear
+- document-aware review interpretation for memo/spec-backed issues so Focus can tell the difference between `review is blocked on the artifact` and `the artifact is attached, monitor instead`
 - dynamic re-stacking so items can move between `now`, `next`, and `ambient` as new evidence arrives
 - inline issue commenting from the Focus surface when a Paperclip issue supports written response
 - durable acknowledge/suppression behavior backed by plugin state and ledger replay
@@ -104,14 +106,19 @@ Before releasing, run:
 pnpm release:check
 ```
 
-For a live local Paperclip smoke test:
+For a live local Paperclip smoke test, start Paperclip first:
 
 ```bash
 pnpm build
+npx paperclipai run -i default
+```
+
+Then, in a second terminal:
+
+```bash
 npx paperclipai context set --api-base http://localhost:3100
 npx paperclipai plugin uninstall tomismeta.paperclip-aperture --force
 npx paperclipai plugin install --local .
-npx paperclipai run -i default
 ```
 
 Then open `http://127.0.0.1:3100/APE/aperture` and verify:
@@ -121,6 +128,7 @@ Then open `http://127.0.0.1:3100/APE/aperture` and verify:
 - issue comments post successfully from Focus
 - approval actions update Focus correctly
 - resolved blocker comments downgrade stale `Now` items
+- attached issue documents downgrade stale `share the memo/spec` review blockers into monitor-only follow-up
 
 ## Links
 

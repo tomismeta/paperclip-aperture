@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
-import type { Agent, Issue, IssueComment } from "@paperclipai/plugin-sdk";
+import type { Agent, Issue, IssueComment, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import manifest from "../src/manifest.js";
 import type { AttentionExport, AttentionReplayScenario, AttentionReviewState, AttentionSnapshot } from "../src/aperture/types.js";
 import plugin from "../src/worker.js";
@@ -8,6 +8,8 @@ import {
   ATTENTION_LEDGER_STATE_KEY,
   ATTENTION_SNAPSHOT_STATE_KEY,
 } from "../src/handlers/shared.js";
+
+type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 
 function createIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -89,6 +91,26 @@ function createAgent(overrides: Partial<Agent> = {}): Agent {
   };
 }
 
+function createIssueDocumentSummary(overrides: Partial<IssueDocumentSummary> = {}): IssueDocumentSummary {
+  return {
+    id: "document-1",
+    companyId: "company-live",
+    issueId: "issue-1",
+    key: "plan",
+    title: "Pricing experiment memo",
+    format: "markdown",
+    latestRevisionId: "revision-1",
+    latestRevisionNumber: 1,
+    createdByAgentId: null,
+    createdByUserId: "user-1",
+    updatedByAgentId: null,
+    updatedByUserId: "user-1",
+    createdAt: new Date("2026-03-19T10:00:00.000Z"),
+    updatedAt: new Date("2026-03-19T10:15:00.000Z"),
+    ...overrides,
+  };
+}
+
 describe("paperclip aperture", () => {
   it("maps approval events into attention state and clears them on acknowledgement", async () => {
     const harness = createTestHarness({ manifest });
@@ -158,7 +180,7 @@ describe("paperclip aperture", () => {
     expect(snapshot.active?.context?.items?.find((item) => item.id === "requested-amount")?.value).toBe("$500");
   });
 
-  it("attaches core semantic payloads and issue relation hints to mapped events", async () => {
+  it("attaches richer core semantic payloads and issue relation hints to mapped events", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
 
@@ -184,18 +206,44 @@ describe("paperclip aperture", () => {
       { companyId: "company-semantic", entityId: "issue-99", entityType: "issue" },
     );
 
+    await harness.emit(
+      "issue.comment.created",
+      {
+        identifier: "CAM-10",
+        issueTitle: "Launch memo resolved",
+        bodySnippet: "Final direction. Use these. Unblock CAM-10 and proceed to launch review.",
+        status: "blocked",
+      },
+      { companyId: "company-semantic", entityId: "issue-100", entityType: "issue" },
+    );
+
     const exported = await harness.getData<AttentionExport>("attention-export", { companyId: "company-semantic" });
     const approvalEntry = exported.eventEntries.find((entry) => entry.source.eventType === "approval.created");
-    const issueEntry = exported.eventEntries.find((entry) => entry.source.eventType === "issue.comment.created");
+    const blockingIssueEntry = exported.eventEntries.find(
+      (entry) => entry.source.eventType === "issue.comment.created" && entry.source.entityId === "issue-99",
+    );
+    const resolvingIssueEntry = exported.eventEntries.find(
+      (entry) => entry.source.eventType === "issue.comment.created" && entry.source.entityId === "issue-100",
+    );
 
     expect(approvalEntry?.apertureEvent.semantic?.confidence).toBe("high");
     expect(approvalEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
       kind: "same_issue",
       target: "issue:issue-99",
     });
-    expect(issueEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
+    expect(blockingIssueEntry?.apertureEvent.semantic?.confidence).toBe("high");
+    expect(blockingIssueEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
       kind: "same_issue",
       target: "issue:issue-99",
+    });
+    expect(blockingIssueEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
+      kind: "supersedes",
+      target: "issue:issue-99",
+    });
+    expect(resolvingIssueEntry?.apertureEvent.semantic?.confidence).toBe("high");
+    expect(resolvingIssueEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
+      kind: "resolves",
+      target: "issue:issue-100",
     });
   });
 
@@ -640,6 +688,81 @@ describe("paperclip aperture", () => {
       "Share the memo with the board so review can continue.",
     );
     expect(snapshot.active?.provenance?.whyNow).toBe("The board still needs the memo before review can continue.");
+  });
+
+  it("downgrades memo-share review requests after a document is attached", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-19T10:16:00.000Z"));
+    const harness = createTestHarness({ manifest });
+    try {
+      await plugin.definition.setup(harness.ctx);
+      harness.seed({
+        issues: [
+          createIssue({
+            status: "in_review",
+            priority: "high",
+            identifier: "APE-7",
+            title: "Review pricing experiment memo",
+          }),
+        ],
+        issueComments: [
+          createIssueComment({
+            body: "I don't actually see the actual memo. Can you share it with the board?",
+            createdAt: new Date("2026-03-19T10:05:00.000Z"),
+            updatedAt: new Date("2026-03-19T10:05:00.000Z"),
+          }),
+        ],
+      });
+      harness.ctx.issues.documents.list = vi.fn(async () => [
+        createIssueDocumentSummary({
+          issueId: "issue-1",
+          updatedAt: new Date("2026-03-19T10:15:00.000Z"),
+        }),
+      ]);
+
+      const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+      expect(snapshot.active).toBeNull();
+      expect(snapshot.queued).toHaveLength(0);
+      expect(snapshot.ambient).toHaveLength(1);
+      expect(snapshot.ambient[0]?.summary).toBe("The requested memo appears attached, so review should be able to continue.");
+      expect(snapshot.ambient[0]?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
+        "Monitor the review now that the memo is attached.",
+      );
+      expect(snapshot.ambient[0]?.provenance?.whyNow).toBe(
+        "Pricing experiment memo was attached after the request, so the missing artifact appears resolved.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to comment-based review blocking when document lookup fails", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [
+        createIssue({
+          status: "in_review",
+          priority: "high",
+          identifier: "APE-7",
+          title: "Review pricing experiment memo",
+        }),
+      ],
+      issueComments: [
+        createIssueComment({
+          body: "I don't actually see the actual memo. Can you share it with the board?",
+        }),
+      ],
+    });
+    harness.ctx.issues.documents.list = vi.fn(async () => {
+      throw new Error("document read unavailable");
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    expect(snapshot.active?.summary).toBe("Board still needs the memo before review can continue.");
+    expect(snapshot.active?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
+      "Share the memo with the board so review can continue.",
+    );
   });
 
   it("acknowledges reconciled issue frames and clears unread state", async () => {

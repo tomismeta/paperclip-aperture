@@ -1,4 +1,4 @@
-import type { Agent, Issue, IssueComment, PluginContext } from "@paperclipai/plugin-sdk";
+import type { Agent, Issue, IssueComment, PluginContext, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import type { AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "./types.js";
 import {
   agentStatusItem,
@@ -18,15 +18,20 @@ import {
   agentAttentionWhyNow,
 } from "./attention-language.js";
 import {
+  analyzeIssueDocuments,
   analyzeIssueIntents,
   hasIntent,
   issueHeadline as issueHeadlineText,
   issueRecommendedMove,
   issueWhyNow,
+  type IssueDocumentSignal,
+  type IssueIntentAnalysis,
   type IssueActorDirectory,
   type LatestComment,
   truncate,
 } from "./issue-intelligence.js";
+
+type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 
 const COMMENT_LOOKUP_CONCURRENCY = 6;
 
@@ -56,15 +61,10 @@ function issueTitle(issue: Issue): string {
   return issue.identifier ? `${issue.identifier} ${issue.title}` : issue.title;
 }
 
-function recommendedMove(issue: Issue, comment: LatestComment, directory?: IssueActorDirectory): string | null {
-  const analysis = analyzeIssueIntents(issue, comment, directory);
-  return issueRecommendedMove(issue, analysis);
-}
-
-function issueHeadline(issue: Issue, comment: LatestComment, directory?: IssueActorDirectory): string {
-  const analysis = analyzeIssueIntents(issue, comment, directory);
-  return issueHeadlineText(issue, analysis);
-}
+type IssueFrameEvidence = {
+  analysis: IssueIntentAnalysis;
+  documentSignal: IssueDocumentSignal;
+};
 
 function latestComment(comments: IssueComment[]): LatestComment {
   if (comments.length === 0) return null;
@@ -82,10 +82,12 @@ function priorityConsequence(issue: Issue): "low" | "medium" | "high" {
   return issue.priority === "critical" || issue.priority === "high" ? "high" : "medium";
 }
 
-function issueLane(issue: Issue, comment: LatestComment, directory?: IssueActorDirectory): FrameLane | null {
-  const analysis = analyzeIssueIntents(issue, comment, directory);
-  if (issue.status === "blocked" && hasIntent(analysis, "resolution")) {
-    return comment || issue.isUnreadForMe ? "ambient" : null;
+function issueLane(issue: Issue, comment: LatestComment, evidence: IssueFrameEvidence): FrameLane | null {
+  if (
+    (issue.status === "blocked" || issue.status === "in_review")
+    && (hasIntent(evidence.analysis, "resolution") || evidence.documentSignal.resolvesArtifactRequest)
+  ) {
+    return comment || issue.isUnreadForMe || evidence.documentSignal.hasDocuments ? "ambient" : null;
   }
   if (issue.status === "blocked") return issue.priority === "critical" ? "active" : "queued";
   if (issue.status === "in_review") return "queued";
@@ -93,17 +95,20 @@ function issueLane(issue: Issue, comment: LatestComment, directory?: IssueActorD
   return null;
 }
 
-function issueSummary(issue: Issue, comment: LatestComment, directory?: IssueActorDirectory): string {
-  return issueHeadline(issue, comment, directory);
+function issueSummary(issue: Issue, evidence: IssueFrameEvidence): string {
+  return issueHeadlineText(issue, evidence.analysis, evidence.documentSignal);
 }
 
-function issueProvenance(issue: Issue, comment: LatestComment, directory?: IssueActorDirectory) {
-  const analysis = analyzeIssueIntents(issue, comment, directory);
-  return issueWhyNow(issue, analysis);
+function issueProvenance(issue: Issue, evidence: IssueFrameEvidence) {
+  return issueWhyNow(issue, evidence.analysis, evidence.documentSignal);
 }
 
-function issueAttentionTimestamp(issue: Issue, comment: LatestComment): string {
-  const commentSignals = [comment?.updatedAt, toIsoString(issue.lastExternalCommentAt)]
+function issueAttentionTimestamp(
+  issue: Issue,
+  comment: LatestComment,
+  documentSignal: IssueDocumentSignal,
+): string {
+  const commentSignals = [comment?.updatedAt, toIsoString(issue.lastExternalCommentAt), documentSignal.latestDocumentUpdatedAt]
     .filter((value): value is string => !!value)
     .sort();
   if (commentSignals.length > 0) return commentSignals.at(-1) as string;
@@ -113,15 +118,22 @@ function issueAttentionTimestamp(issue: Issue, comment: LatestComment): string {
     ?? new Date(0).toISOString();
 }
 
-function issueFrame(issue: Issue, comment: LatestComment, directory?: IssueActorDirectory): StoredFrameCandidate | null {
-  const lane = issueLane(issue, comment, directory);
+function issueFrame(
+  issue: Issue,
+  comment: LatestComment,
+  documents: IssueDocumentSummary[],
+  directory?: IssueActorDirectory,
+): StoredFrameCandidate | null {
+  const analysis = analyzeIssueIntents(issue, comment, directory);
+  const documentSignal = analyzeIssueDocuments(documents, comment, analysis);
+  const evidence: IssueFrameEvidence = { analysis, documentSignal };
+  const lane = issueLane(issue, comment, evidence);
   if (!lane) return null;
 
-  const updatedAt = issueAttentionTimestamp(issue, comment);
-  const provenance = issueProvenance(issue, comment, directory);
-  const analysis = analyzeIssueIntents(issue, comment, directory);
-  const owner = hasIntent(analysis, "resolution") ? null : analysis.owner;
-  const move = recommendedMove(issue, comment, directory);
+  const updatedAt = issueAttentionTimestamp(issue, comment, documentSignal);
+  const provenance = issueProvenance(issue, evidence);
+  const owner = hasIntent(analysis, "resolution") || documentSignal.resolvesArtifactRequest ? null : analysis.owner;
+  const move = issueRecommendedMove(issue, analysis, documentSignal);
   const target = analysis.blockingTarget;
 
   return {
@@ -140,7 +152,7 @@ function issueFrame(issue: Issue, comment: LatestComment, directory?: IssueActor
       tone: issue.status === "blocked" ? "focused" : lane === "ambient" ? "ambient" : "focused",
       consequence: issue.status === "blocked" ? priorityConsequence(issue) : lane === "ambient" ? "low" : "medium",
       title: issueTitle(issue),
-      summary: issueSummary(issue, comment, directory),
+      summary: issueSummary(issue, evidence),
       context: {
         items: [
           ...(owner ? [needsActionFromItem(owner)] : []),
@@ -255,6 +267,21 @@ async function safeListComments(ctx: PluginContext, issue: Issue): Promise<Lates
   }
 }
 
+async function safeListDocuments(
+  ctx: PluginContext,
+  issue: Issue,
+): Promise<IssueDocumentSummary[]> {
+  try {
+    return await ctx.issues.documents.list(issue.id, issue.companyId);
+  } catch (error) {
+    ctx.logger.warn("Failed to load issue documents during Aperture reconciliation", {
+      issueId: issue.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
 async function mapWithConcurrency<TInput, TOutput>(
   items: TInput[],
   limit: number,
@@ -285,19 +312,25 @@ async function loadIssueCandidates(ctx: PluginContext, companyId: string): Promi
   ]);
 
   const issues = [...blocked, ...inReview];
-  const comments = await mapWithConcurrency(
-    issues,
-    COMMENT_LOOKUP_CONCURRENCY,
-    (issue) => safeListComments(ctx, issue),
-  );
-
-  const allAgents = await ctx.agents.list({ companyId, limit: 100 });
+  const [comments, documents, allAgents] = await Promise.all([
+    mapWithConcurrency(
+      issues,
+      COMMENT_LOOKUP_CONCURRENCY,
+      (issue) => safeListComments(ctx, issue),
+    ),
+    mapWithConcurrency(
+      issues,
+      COMMENT_LOOKUP_CONCURRENCY,
+      (issue) => safeListDocuments(ctx, issue),
+    ),
+    ctx.agents.list({ companyId, limit: 100 }),
+  ]);
   const directory: IssueActorDirectory = {
     agentNames: allAgents.map((agent) => agent.name).filter((name): name is string => typeof name === "string" && name.trim().length > 0),
   };
 
   return issues
-    .map((issue, index) => issueFrame(issue, comments[index] ?? null, directory))
+    .map((issue, index) => issueFrame(issue, comments[index] ?? null, documents[index] ?? [], directory))
     .filter((candidate): candidate is StoredFrameCandidate => candidate !== null);
 }
 

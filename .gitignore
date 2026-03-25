@@ -3,3 +3,4 @@ node_modules
 .paperclip-sdk
 *.tgz
 .DS_Store
+tmp/

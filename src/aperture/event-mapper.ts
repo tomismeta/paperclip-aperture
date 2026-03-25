@@ -18,6 +18,10 @@ import {
   linkedIssuesItem,
   requestedAmountItem,
 } from "./attention-context.js";
+import {
+  analyzeIssueTextSemantics,
+  issueRelationTarget,
+} from "./issue-intelligence.js";
 
 type ExtendedPluginEventType =
   | PluginEvent["eventType"]
@@ -160,10 +164,6 @@ function issueDisplayTitle(event: MappablePluginEvent, fallback: string): string
   return fallback;
 }
 
-function issueRelationTarget(issueId: string): string {
-  return `issue:${issueId}`;
-}
-
 function relationHintsForIssueTargets(issueIds: string[] | undefined): SourceEvent["semanticHints"] | undefined {
   if (!issueIds || issueIds.length === 0) return undefined;
 
@@ -175,10 +175,31 @@ function relationHintsForIssueTargets(issueIds: string[] | undefined): SourceEve
   };
 }
 
+function issueSemanticText(payload: unknown): string {
+  return [
+    readPayloadString(payload, "bodySnippet"),
+    readPayloadString(payload, "summary"),
+    readPayloadString(payload, "description"),
+    readPayloadString(payload, "title"),
+    readPayloadString(payload, "issueTitle"),
+  ]
+    .filter((value): value is string => !!value)
+    .join("\n");
+}
+
 function issueSemanticHints(event: MappablePluginEvent): SourceEvent["semanticHints"] | undefined {
-  return event.entityType === "issue" && event.entityId
-    ? relationHintsForIssueTargets([event.entityId])
-    : undefined;
+  if (event.entityType !== "issue" || !event.entityId) return undefined;
+
+  const semanticAnalysis = analyzeIssueTextSemantics({
+    text: issueSemanticText(event.payload),
+    identifier: readPayloadString(event.payload, "identifier"),
+    issueTarget: issueRelationTarget(event.entityId),
+  });
+
+  return {
+    ...(semanticAnalysis.semanticConfidence ? { confidence: semanticAnalysis.semanticConfidence } : {}),
+    ...(semanticAnalysis.relationHints.length > 0 ? { relationHints: semanticAnalysis.relationHints } : {}),
+  };
 }
 
 function approvalSemanticHints(
@@ -186,7 +207,6 @@ function approvalSemanticHints(
   linkedIssueIds: string[] | undefined,
 ): SourceEvent["semanticHints"] {
   return {
-    confidence: "high",
     whyNow: approvalBlockingWhyNow(budgetOverride),
     factors: budgetOverride
       ? ["budget stop", "approval", "operator decision"]
@@ -197,7 +217,6 @@ function approvalSemanticHints(
 
 function pendingApprovalSemanticHints(): SourceEvent["semanticHints"] {
   return {
-    confidence: "high",
     whyNow: pendingApprovalEventWhyNow(),
     factors: ["pending approval"],
   };
@@ -206,7 +225,6 @@ function pendingApprovalSemanticHints(): SourceEvent["semanticHints"] {
 function runFailureSemanticHints(): SourceEvent["semanticHints"] {
   return {
     intentFrame: "failure",
-    confidence: "high",
     whyNow: runFailedWhyNow(),
     factors: ["run failed", "operator review"],
   };

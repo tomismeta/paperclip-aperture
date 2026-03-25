@@ -1,9 +1,12 @@
-import type { Issue } from "@paperclipai/plugin-sdk";
+import type { Issue, PluginIssuesClient } from "@paperclipai/plugin-sdk";
+import type { SemanticConfidence, SemanticRelationHint } from "@tomismeta/aperture-core/semantic";
 
 export type LatestComment = {
   body: string;
   updatedAt: string;
 } | null;
+
+type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 
 export type IssueIntentKey =
   | "clarification"
@@ -34,10 +37,19 @@ export type IssueIntentAnalysis = {
   blockingTarget: string | null;
   intents: Set<IssueIntentKey>;
   explicitBoardInstruction: string | null;
+  semanticConfidence: SemanticConfidence | null;
+  relationHints: SemanticRelationHint[];
 };
 
 export type IssueActorDirectory = {
   agentNames: string[];
+};
+
+export type IssueDocumentSignal = {
+  hasDocuments: boolean;
+  latestDocumentTitle: string | null;
+  latestDocumentUpdatedAt: string | null;
+  resolvesArtifactRequest: boolean;
 };
 
 function titleCase(value: string): string {
@@ -59,12 +71,112 @@ export function issueText(issue: Issue, comment: LatestComment): string {
   return [comment?.body, issue.description].filter((value): value is string => !!value).join("\n");
 }
 
+function toTimestamp(value: Date | string | null | undefined): number {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function toIsoString(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  return value.toISOString();
+}
+
 function normalizeActorKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function issueRelationTarget(issueId: string): string {
+  return `issue:${issueId}`;
+}
+
+function detectIssueIntents(text: string): Set<IssueIntentKey> {
+  const intents = new Set<IssueIntentKey>();
+
+  for (const detector of ISSUE_INTENT_DETECTORS) {
+    if (detector.pattern.test(text)) intents.add(detector.key);
+  }
+
+  return intents;
+}
+
+function blockingTargetForText(text: string, identifier?: string | null): string | null {
+  const normalizedIdentifier = identifier?.toUpperCase();
+  const matches = text.match(/\b[A-Z]+-\d+\b/g) ?? [];
+  return matches.find((match) => match.toUpperCase() !== normalizedIdentifier) ?? null;
+}
+
+function explicitBoardInstructionForText(text: string): string | null {
+  return text.replace(/\s+/g, " ").trim().match(/(board should either .*?)(?:[.!?]|$)/i)?.[1] ?? null;
+}
+
+function semanticConfidenceForIntents(intents: Set<IssueIntentKey>): SemanticConfidence | null {
+  if (
+    intents.has("resolution")
+    || intents.has("share_with_board")
+    || intents.has("confirmation")
+    || intents.has("board_instruction")
+  ) {
+    return "high";
+  }
+
+  if (intents.has("clarification")) return "medium";
+  return null;
+}
+
+function relationHintsForIntents(
+  intents: Set<IssueIntentKey>,
+  issueTarget?: string | null,
+): SemanticRelationHint[] {
+  const hints: SemanticRelationHint[] = [];
+  const target = issueTarget ?? undefined;
+
+  if (target) {
+    hints.push({ kind: "same_issue", target });
+  }
+
+  if (intents.has("resolution")) {
+    hints.push(target ? { kind: "resolves", target } : { kind: "resolves" });
+    return hints;
+  }
+
+  if (
+    intents.has("share_with_board")
+    || intents.has("confirmation")
+    || intents.has("board_instruction")
+  ) {
+    hints.push(target ? { kind: "supersedes", target } : { kind: "supersedes" });
+    return hints;
+  }
+
+  if (intents.has("clarification")) {
+    hints.push(target ? { kind: "repeats", target } : { kind: "repeats" });
+  }
+
+  return hints;
+}
+
+export function analyzeIssueTextSemantics(input: {
+  text: string;
+  identifier?: string | null;
+  issueTarget?: string | null;
+}): Pick<IssueIntentAnalysis, "text" | "blockingTarget" | "intents" | "explicitBoardInstruction" | "semanticConfidence" | "relationHints"> {
+  const intents = detectIssueIntents(input.text);
+
+  return {
+    text: input.text,
+    blockingTarget: blockingTargetForText(input.text, input.identifier),
+    intents,
+    explicitBoardInstruction: explicitBoardInstructionForText(input.text),
+    semanticConfidence: semanticConfidenceForIntents(intents),
+    relationHints: relationHintsForIntents(intents, input.issueTarget),
+  };
 }
 
 function resolveAgentOwner(text: string, directory: IssueActorDirectory | undefined): string | null {
@@ -89,11 +201,11 @@ export function analyzeIssueIntents(
   directory?: IssueActorDirectory,
 ): IssueIntentAnalysis {
   const text = issueText(issue, comment);
-  const intents = new Set<IssueIntentKey>();
-
-  for (const detector of ISSUE_INTENT_DETECTORS) {
-    if (detector.pattern.test(text)) intents.add(detector.key);
-  }
+  const semanticAnalysis = analyzeIssueTextSemantics({
+    text,
+    identifier: issue.identifier,
+    issueTarget: issueRelationTarget(issue.id),
+  });
 
   const agentOwner = resolveAgentOwner(text, directory);
   const mentionMatch = text.match(/needed from\s+@([a-z0-9_-]+)/i) ?? text.match(/@([a-z0-9_-]+)/i);
@@ -115,18 +227,10 @@ export function analyzeIssueIntents(
       ? "human"
       : null;
 
-  const identifier = issue.identifier?.toUpperCase();
-  const matches = text.match(/\b[A-Z]+-\d+\b/g) ?? [];
-  const blockingTarget = matches.find((match) => match.toUpperCase() !== identifier) ?? null;
-  const explicitBoardInstruction = text.replace(/\s+/g, " ").trim().match(/(board should either .*?)(?:[.!?]|$)/i)?.[1] ?? null;
-
   return {
-    text,
+    ...semanticAnalysis,
     owner,
     ownerKind,
-    blockingTarget,
-    intents,
-    explicitBoardInstruction,
   };
 }
 
@@ -139,8 +243,44 @@ export function ownerPhrase(value: string, ownerKind: "agent" | "human" | null):
   return actorPhrase(value);
 }
 
-export function issueRecommendedMove(issue: Issue, analysis: IssueIntentAnalysis): string | null {
+function latestIssueDocument(documents: IssueDocumentSummary[]): IssueDocumentSummary | null {
+  if (documents.length === 0) return null;
+
+  return [...documents].sort(
+    (left, right) => toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt),
+  )[0] ?? null;
+}
+
+export function analyzeIssueDocuments(
+  documents: IssueDocumentSummary[],
+  comment: LatestComment,
+  analysis: IssueIntentAnalysis,
+): IssueDocumentSignal {
+  const latest = latestIssueDocument(documents);
+  const latestUpdatedAt = toIsoString(latest?.updatedAt);
+  const commentUpdatedAt = comment?.updatedAt ?? null;
+
+  return {
+    hasDocuments: documents.length > 0,
+    latestDocumentTitle: latest?.title ?? null,
+    latestDocumentUpdatedAt: latestUpdatedAt,
+    resolvesArtifactRequest:
+      hasIntent(analysis, "share_with_board")
+      && !!latest
+      && (!commentUpdatedAt || toTimestamp(latestUpdatedAt) >= toTimestamp(commentUpdatedAt)),
+  };
+}
+
+export function issueRecommendedMove(
+  issue: Issue,
+  analysis: IssueIntentAnalysis,
+  documentSignal?: IssueDocumentSignal,
+): string | null {
   const normalized = analysis.text.replace(/\s+/g, " ").trim();
+
+  if (documentSignal?.resolvesArtifactRequest) {
+    return "Monitor the review now that the memo is attached.";
+  }
 
   if (hasIntent(analysis, "resolution")) {
     return "Monitor execution and confirm the team resumes work.";
@@ -177,7 +317,15 @@ export function issueRecommendedMove(issue: Issue, analysis: IssueIntentAnalysis
   return null;
 }
 
-export function issueHeadline(issue: Issue, analysis: IssueIntentAnalysis): string {
+export function issueHeadline(
+  issue: Issue,
+  analysis: IssueIntentAnalysis,
+  documentSignal?: IssueDocumentSignal,
+): string {
+  if (documentSignal?.resolvesArtifactRequest) {
+    return "The requested memo appears attached, so review should be able to continue.";
+  }
+
   if (hasIntent(analysis, "resolution")) {
     return "Latest operator guidance appears to unblock this issue.";
   }
@@ -215,7 +363,20 @@ export function issueHeadline(issue: Issue, analysis: IssueIntentAnalysis): stri
   return "This issue has new operator-relevant activity.";
 }
 
-export function issueWhyNow(issue: Issue, analysis: IssueIntentAnalysis): { whyNow: string; factors: string[] } {
+export function issueWhyNow(
+  issue: Issue,
+  analysis: IssueIntentAnalysis,
+  documentSignal?: IssueDocumentSignal,
+): { whyNow: string; factors: string[] } {
+  if (documentSignal?.resolvesArtifactRequest) {
+    return {
+      whyNow: documentSignal.latestDocumentTitle
+        ? `${documentSignal.latestDocumentTitle} was attached after the request, so the missing artifact appears resolved.`
+        : "A review document was attached after the request, so the missing artifact appears resolved.",
+      factors: ["document attached", "review can proceed"],
+    };
+  }
+
   if (hasIntent(analysis, "resolution")) {
     return {
       whyNow: "The latest comment appears to resolve the blocker; monitor execution rather than intervening.",
