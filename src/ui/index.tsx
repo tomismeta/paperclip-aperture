@@ -1055,14 +1055,20 @@ function IssueCommentComposer(props: {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  if (!isIssueFrame(props.frame)) return null;
+  const issueFrame = isIssueFrame(props.frame);
 
   const isPending = props.pendingId === props.frame.id;
 
   useEffect(() => {
-    if (open) textareaRef.current?.focus();
-  }, [open]);
+    setOpen(false);
+    setBody("");
+  }, [props.frame.id]);
+
+  useEffect(() => {
+    if (open && issueFrame) textareaRef.current?.focus();
+  }, [open, issueFrame]);
+
+  if (!issueFrame) return null;
 
   async function submit() {
     const nextBody = body.trim();
@@ -1100,9 +1106,9 @@ function IssueCommentComposer(props: {
   }
 
   return (
-    <div className="w-full space-y-2 border border-border bg-secondary/40 p-3">
+    <div className="w-full space-y-2 rounded-md border border-border bg-secondary/40 p-3">
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-        Posts to the issue thread
+        Posts to the issue thread without leaving Focus.
       </div>
       <textarea
         ref={textareaRef}
@@ -1267,7 +1273,7 @@ function NowActionRail(props: {
   return (
     <div
       className="space-y-3 rounded-md border border-border/60 bg-secondary/20 px-3 py-3"
-      style={props.wide ? { width: 336, flexShrink: 0 } : undefined}
+      style={props.wide ? { width: 320, flexShrink: 0, position: "sticky", top: 16, alignSelf: "flex-start" } : undefined}
     >
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
@@ -1391,7 +1397,7 @@ function NowPane(props: {
 }) {
   const frame = props.snapshot.active;
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const wideLayout = useWideLayout();
+  const wideLayout = useWideLayout(1120);
   const activeFrameId = frame?.id ?? null;
   const activeUnread = !!frame && (props.snapshot.review?.unread.active ?? 0) > 0;
   const itemLink = frame ? itemHref(frame, props.companyPrefix) : null;
@@ -1472,6 +1478,26 @@ function NowPane(props: {
                 </div>
 
                 <InlineExplainability frame={frame} lane="active" />
+
+                <div className="flex items-center gap-4">
+                  <Accent><button
+                    type="button"
+                    onClick={() => setDetailsOpen(!detailsOpen)}
+                    aria-expanded={detailsOpen}
+                    className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
+                    style={{ color: "inherit" }}
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+                    </svg>
+                    {detailsOpen ? "Hide context" : "Show context"}
+                  </button></Accent>
+                </div>
               </div>
 
               <NowActionRail
@@ -1486,26 +1512,6 @@ function NowPane(props: {
                 onAcknowledge={props.onAcknowledge}
                 onComment={props.onComment}
               />
-            </div>
-
-            <div className="flex items-center gap-4">
-              <Accent><button
-                type="button"
-                onClick={() => setDetailsOpen(!detailsOpen)}
-                aria-expanded={detailsOpen}
-                className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
-                style={{ color: "inherit" }}
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
-                  fill="currentColor"
-                  aria-hidden="true"
-                >
-                  <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
-                </svg>
-                {detailsOpen ? "Hide context" : "Show context"}
-              </button></Accent>
             </div>
 
             {detailsOpen ? (
