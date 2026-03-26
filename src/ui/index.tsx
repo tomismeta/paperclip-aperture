@@ -1300,48 +1300,55 @@ function NowActionRail(props: {
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {commentEnabled ? (
+      {commentEnabled ? (
+        <div className="flex flex-wrap items-center gap-2">
           <ActionButton
             label="Comment"
             tone="accent"
             disabled={isPending}
             onClick={() => setCommentOpen(true)}
           />
-        ) : null}
+        </div>
+      ) : null}
 
-        {actionMode === "approval" ? (
-          <>
-            {isBudgetOverride(props.frame) ? (
-              <ActionButton
-                label="Request revision"
-                tone="secondary"
-                disabled={isPending}
-                onClick={() => void props.onRequestRevision(props.frame)}
-              />
-            ) : null}
+      {actionMode === "approval" ? (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
             <ActionButton
               label={isPending ? "Submitting…" : "Approve"}
               tone="primary"
               disabled={isPending}
+              className="w-full"
               onClick={() => void props.onApprove(props.frame)}
             />
             <ActionButton
               label="Reject"
               tone="danger"
               disabled={isPending}
+              className="w-full"
               onClick={() => void props.onReject(props.frame)}
             />
-          </>
-        ) : actionMode === "acknowledge" ? (
+          </div>
+          {isBudgetOverride(props.frame) ? (
+            <ActionButton
+              label="Request revision"
+              tone="secondary"
+              disabled={isPending}
+              className="w-full"
+              onClick={() => void props.onRequestRevision(props.frame)}
+            />
+          ) : null}
+        </div>
+      ) : actionMode === "acknowledge" ? (
+        <div className="flex flex-wrap items-center gap-2">
           <ActionButton
             label={isPending ? "Saving…" : "Acknowledge"}
             tone="accent"
             disabled={isPending}
             onClick={() => void props.onAcknowledge(props.frame)}
           />
-        ) : null}
-      </div>
+        </div>
+      ) : null}
       {props.itemLink ? (
         <a
           href={props.itemLink}
