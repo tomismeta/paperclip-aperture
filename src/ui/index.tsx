@@ -65,6 +65,8 @@ type SurfaceBrand = {
 // Uses inline styles because the host Tailwind JIT won't scan plugin bundles
 // for arbitrary values.
 const ACCENT_COLOR = "#007ACC";
+const ACCENT_BG = `${ACCENT_COLOR}14`;
+const ACCENT_BORDER = `${ACCENT_COLOR}33`;
 const ACCENT_BG_STYLE: React.CSSProperties = { backgroundColor: ACCENT_COLOR };
 
 function currentSurfaceBrand(): SurfaceBrand {
@@ -91,6 +93,17 @@ function useAccentColor<T extends HTMLElement>() {
 function Accent({ children, className }: { children: React.ReactNode; className?: string }) {
   const ref = useAccentColor<HTMLSpanElement>();
   return <span ref={ref} className={className}>{children}</span>;
+}
+
+function QuietMark({ size = "sm" }: { size?: "sm" | "md" }) {
+  const dimension = size === "md" ? 10 : 8;
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block shrink-0 rounded-full border"
+      style={{ width: dimension, height: dimension, borderColor: ACCENT_BORDER }}
+    />
+  );
 }
 
 function cn(...parts: Array<string | false | null | undefined>): string {
@@ -186,7 +199,7 @@ function driverLabel(frame: StoredAttentionFrame): string | null {
 function driverBadgeStyle(): { className: string; style: React.CSSProperties } {
   return {
     className: "border-transparent",
-    style: { color: ACCENT_COLOR, backgroundColor: `${ACCENT_COLOR}14`, borderColor: `${ACCENT_COLOR}40` },
+    style: { color: ACCENT_COLOR, backgroundColor: ACCENT_BG, borderColor: ACCENT_BORDER },
   };
 }
 
@@ -458,7 +471,7 @@ function StatusToast({ message }: { message: string | null }) {
   return (
     <div
       className={cn(
-        "pointer-events-none fixed bottom-6 right-6 z-50 transition-all duration-200",
+        "pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 transition-all duration-200",
         message ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0",
       )}
       aria-live="polite"
@@ -745,7 +758,7 @@ function Badge(props: { children: ReactNode; className?: string; style?: React.C
 
 function ActionButton(props: {
   label: string;
-  tone: "primary" | "danger" | "secondary";
+  tone: "primary" | "danger" | "secondary" | "accent";
   disabled?: boolean;
   className?: string;
   onClick: () => void;
@@ -753,6 +766,8 @@ function ActionButton(props: {
   const toneClass =
     props.tone === "primary"
       ? "bg-green-700 text-white hover:bg-green-600"
+      : props.tone === "accent"
+        ? "text-white hover:opacity-90"
       : props.tone === "danger"
         ? "bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
         : "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50";
@@ -767,9 +782,11 @@ function ActionButton(props: {
         "transition-[color,background-color,border-color,box-shadow,opacity]",
         "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
         "disabled:pointer-events-none disabled:opacity-50",
+        props.disabled && /…|\.\.\./.test(props.label) && "animate-pulse",
         toneClass,
         props.className,
       )}
+      style={props.tone === "accent" ? ACCENT_BG_STYLE : undefined}
     >
       {props.label}
     </button>
@@ -784,8 +801,8 @@ function QueueMovementBadge({ movement }: { movement?: QueueMovement }) {
       className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium"
       style={{
         color: ACCENT_COLOR,
-        backgroundColor: `${ACCENT_COLOR}12`,
-        borderColor: `${ACCENT_COLOR}33`,
+        backgroundColor: ACCENT_BG,
+        borderColor: ACCENT_BORDER,
       }}
     >
       <span aria-hidden="true">{movement === "up" ? "\u2191" : "\u2193"}</span>
@@ -837,7 +854,7 @@ function FrameActions(props: {
       ) : (
         <ActionButton
           label={isPending ? "Saving\u2026" : "Acknowledge"}
-          tone="primary"
+          tone="accent"
           disabled={isPending}
           onClick={() => void props.onAcknowledge(props.frame)}
         />
@@ -851,7 +868,7 @@ function FrameActions(props: {
 // ---------------------------------------------------------------------------
 
 function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
-  const items = frame.context?.items ?? [];
+  const items = (frame.context?.items ?? []).filter((item) => item.id !== ATTENTION_CONTEXT_IDS.recommendedMove);
   if (items.length === 0) return null;
 
   return (
@@ -863,7 +880,6 @@ function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
             "border border-border bg-secondary/50 px-3 py-2",
             (
               item.id === ATTENTION_CONTEXT_IDS.latestComment
-              || item.id === ATTENTION_CONTEXT_IDS.recommendedMove
             ) && "md:col-span-2",
           )}
         >
@@ -871,19 +887,6 @@ function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
           <div className="mt-1 text-sm text-foreground">{item.value ?? "Available"}</div>
         </div>
       ))}
-    </div>
-  );
-}
-
-function DetailCard(props: {
-  label: string;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("border border-border bg-secondary/50 px-3 py-2", props.className)}>
-      <div className="text-xs font-medium text-muted-foreground">{props.label}</div>
-      <div className="mt-1">{props.children}</div>
     </div>
   );
 }
@@ -897,11 +900,39 @@ function ExplainabilityBadges(props: { values: string[]; accent?: boolean }) {
         <Badge
           key={value}
           className={props.accent ? "border-transparent" : "border-border bg-background/70 text-foreground/80"}
-          style={props.accent ? { color: ACCENT_COLOR, backgroundColor: `${ACCENT_COLOR}14`, borderColor: `${ACCENT_COLOR}33` } : undefined}
+          style={props.accent ? { color: ACCENT_COLOR, backgroundColor: ACCENT_BG, borderColor: ACCENT_BORDER } : undefined}
         >
           {value}
         </Badge>
       ))}
+    </div>
+  );
+}
+
+function InlineExplainability(props: {
+  frame: StoredAttentionFrame;
+  lane: FrameLane;
+}) {
+  const explanation = explainFrame(props.frame, props.lane);
+  const chips = [
+    ...(explanation.signalStrength ? [signalStrengthLabel(explanation.signalStrength)] : []),
+    ...explanation.signals.slice(0, 2),
+    ...explanation.relationLabels.slice(0, 1),
+  ];
+  const label = props.lane === "queued" ? "Why next" : props.lane === "ambient" ? "Why ambient" : "Why now";
+
+  return (
+    <div className="space-y-2 border-l-2 pl-4" style={{ borderColor: ACCENT_COLOR }}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+        {label}
+      </div>
+      <p className="max-w-3xl text-sm leading-relaxed text-foreground/90">
+        {explanation.whyNow ?? judgmentLine(props.frame, props.lane)}
+      </p>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {explanation.laneReason}
+      </p>
+      {chips.length > 0 ? <ExplainabilityBadges values={chips} accent /> : null}
     </div>
   );
 }
@@ -912,40 +943,51 @@ function ExplainabilityPanel(props: {
 }) {
   const explanation = explainFrame(props.frame, props.lane);
   const strength = explanation.signalStrength ? signalStrengthLabel(explanation.signalStrength) : null;
+  const reasoningLabel = props.lane === "active" ? "Decision reasoning" : props.lane === "queued" ? "Queue reasoning" : "Ambient reasoning";
 
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      <DetailCard label="Why now" className="lg:col-span-2">
-        <p className="text-sm leading-relaxed text-foreground/90">
-          {explanation.whyNow ?? judgmentLine(props.frame, props.lane)}
-        </p>
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          {explanation.laneReason}
-        </p>
-      </DetailCard>
-
-      {strength ? (
-        <DetailCard label="Confidence">
-          <p className="text-sm text-foreground/90">{strength}</p>
-        </DetailCard>
-      ) : null}
-
-      {explanation.continuity ? (
-        <DetailCard label="Related activity">
-          <p className="text-sm leading-relaxed text-foreground/90">{explanation.continuity}</p>
-        </DetailCard>
-      ) : null}
-
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div>
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            {reasoningLabel}
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            {explanation.laneReason}
+          </p>
+        </div>
+        {strength ? (
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+              Confidence
+            </div>
+            <p className="mt-1 text-sm text-foreground/90">{strength}</p>
+          </div>
+        ) : null}
+      </div>
       {explanation.signals.length > 0 ? (
-        <DetailCard label="Signals" className={explanation.relationLabels.length > 0 ? "lg:col-span-1" : "lg:col-span-2"}>
+        <div className="space-y-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            Signals
+          </div>
           <ExplainabilityBadges values={explanation.signals} />
-        </DetailCard>
+        </div>
       ) : null}
-
       {explanation.relationLabels.length > 0 ? (
-        <DetailCard label="Thread context" className={explanation.signals.length > 0 ? "lg:col-span-1" : "lg:col-span-2"}>
+        <div className="space-y-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            Thread context
+          </div>
           <ExplainabilityBadges values={explanation.relationLabels} accent />
-        </DetailCard>
+        </div>
+      ) : null}
+      {explanation.continuity ? (
+        <div className="space-y-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            Related activity
+          </div>
+          <p className="text-sm leading-relaxed text-muted-foreground">{explanation.continuity}</p>
+        </div>
       ) : null}
     </div>
   );
@@ -955,25 +997,9 @@ function ExplainabilityStrip(props: {
   frame: StoredAttentionFrame;
   lane: FrameLane;
 }) {
-  const explanation = explainFrame(props.frame, props.lane);
-  const chips = [
-    ...(explanation.signalStrength ? [signalStrengthLabel(explanation.signalStrength)] : []),
-    ...explanation.signals.slice(0, 2),
-    ...explanation.relationLabels.slice(0, 1),
-  ];
-
   return (
-    <div className="space-y-2 rounded-md border border-border/70 bg-secondary/30 px-3 py-2">
-      <div className="text-xs font-medium text-muted-foreground">
-        {props.lane === "queued" ? "Why next" : props.lane === "ambient" ? "Why ambient" : "Why now"}
-      </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        {explanation.whyNow ?? judgmentLine(props.frame, props.lane)}
-      </p>
-      <div className="text-[11px] leading-relaxed text-muted-foreground">
-        {explanation.laneReason}
-      </div>
-      {chips.length > 0 ? <ExplainabilityBadges values={chips} accent /> : null}
+    <div className="space-y-2 border-t border-border/60 pt-3">
+      <InlineExplainability frame={props.frame} lane={props.lane} />
     </div>
   );
 }
@@ -986,8 +1012,9 @@ function IssueCommentComposer(props: {
   frame: StoredAttentionFrame;
   pendingId: string | null;
   onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
-  triggerTone?: "link" | "secondary" | "primary";
+  triggerTone?: "link" | "secondary" | "primary" | "accent";
   triggerLabel?: string;
+  triggerFullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
@@ -1024,7 +1051,7 @@ function IssueCommentComposer(props: {
       <ActionButton
         label={label}
         tone={triggerTone}
-        className="w-full"
+        className={props.triggerFullWidth ? "w-full" : undefined}
         disabled={isPending}
         onClick={() => setOpen(true)}
       />
@@ -1053,7 +1080,7 @@ function IssueCommentComposer(props: {
         />
         <ActionButton
           label={isPending ? "Posting…" : "Post comment"}
-          tone="primary"
+          tone="accent"
           className="w-full"
           disabled={isPending || body.trim().length === 0}
           onClick={() => void submit()}
@@ -1085,6 +1112,9 @@ function NowDetails(props: {
         {budgetReason(frame) ? <span>{budgetReason(frame)}</span> : null}
       </div>
 
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+        Context
+      </div>
       <ContextItems frame={frame} />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -1131,7 +1161,8 @@ function NowDetails(props: {
 
 function QuietNow() {
   return (
-    <div className="flex min-h-16 items-center">
+    <div className="flex min-h-20 items-center gap-3">
+      <QuietMark size="md" />
       <div className="text-sm text-muted-foreground">Nothing active right now.</div>
     </div>
   );
@@ -1153,22 +1184,19 @@ function NowActionRail(props: {
   const commentEnabled = actionMode === "acknowledge" && isIssueFrame(props.frame);
 
   return (
-    <aside
-      className="space-y-4 border border-border bg-secondary/20 p-4"
-      style={{ flex: "0 1 20rem", minWidth: "18rem" }}
-    >
-      <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+    <div className="space-y-3">
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
       </div>
-
-      <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
         {commentEnabled ? (
           <IssueCommentComposer
             frame={props.frame}
             pendingId={props.pendingId}
             onComment={props.onComment}
-            triggerTone="primary"
+            triggerTone="accent"
             triggerLabel="Comment"
+            triggerFullWidth={false}
           />
         ) : null}
 
@@ -1179,7 +1207,6 @@ function NowActionRail(props: {
                 label="Request revision"
                 tone="secondary"
                 disabled={isPending}
-                className="w-full"
                 onClick={() => void props.onRequestRevision(props.frame)}
               />
             ) : null}
@@ -1187,40 +1214,37 @@ function NowActionRail(props: {
               label={isPending ? "Submitting…" : "Approve"}
               tone="primary"
               disabled={isPending}
-              className="w-full"
               onClick={() => void props.onApprove(props.frame)}
             />
             <ActionButton
               label="Reject"
               tone="danger"
               disabled={isPending}
-              className="w-full"
               onClick={() => void props.onReject(props.frame)}
             />
           </>
         ) : actionMode === "acknowledge" ? (
           <ActionButton
             label={isPending ? "Saving…" : "Acknowledge"}
-            tone={commentEnabled ? "secondary" : "primary"}
+            tone="accent"
             disabled={isPending}
-            className="w-full"
             onClick={() => void props.onAcknowledge(props.frame)}
           />
         ) : null}
-      </div>
 
-      {props.itemLink ? (
-        <a
-          href={props.itemLink}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-        >
-          {primaryLinkLabel(props.frame)}
-          <ExternalLinkIcon />
-        </a>
-      ) : null}
-    </aside>
+        {props.itemLink ? (
+          <a
+            href={props.itemLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            {primaryLinkLabel(props.frame)}
+            <ExternalLinkIcon />
+          </a>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -1252,16 +1276,16 @@ function NowPane(props: {
   }, [activeFrameId]);
 
   return (
-    <section className="border border-border bg-card shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-accent px-4 py-2.5 sm:px-6">
+    <section
+      className="border border-border bg-card shadow-sm"
+      style={frame ? { borderLeftWidth: 3, borderLeftColor: ACCENT_COLOR } : undefined}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-border bg-accent px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
-          <Accent className="text-base leading-none">{props.posture.glyph}</Accent>
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-end gap-2">
-              <Accent className="text-[18px] leading-none font-bold tracking-[0.04em]">{props.brand.wordmark}</Accent>
-              <Accent className="text-xs leading-none">{props.posture.label}</Accent>
-            </div>
-            <div className="text-[10px] leading-none text-muted-foreground/60">{props.brand.supportCopy}</div>
+          <Accent className="text-sm leading-none">{props.posture.glyph}</Accent>
+          <div className="flex items-end gap-2">
+            <Accent className="text-base leading-none font-semibold tracking-[0.04em]">{props.brand.wordmark}</Accent>
+            <span className="text-[11px] leading-none text-muted-foreground">{props.posture.label}</span>
           </div>
         </div>
         <div className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
@@ -1276,68 +1300,46 @@ function NowPane(props: {
           </span>
         </div>
       </div>
-
-      <div style={{ height: "0.75rem" }} aria-hidden="true" />
-      <div className="px-4 pb-4 sm:px-6">
+      <div className="px-5 py-5 sm:px-6">
         {!frame ? (
           <QuietNow />
         ) : (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-start gap-6">
-              <div className="min-w-0 space-y-4" style={{ flex: "1 1 40rem" }}>
-                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  <span>Now</span>
-                  <span className="normal-case tracking-normal" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
-                </div>
-
-                {recommendedMove ? (
-                  <div className="max-w-4xl text-[2rem] font-semibold leading-tight text-foreground">
-                    {recommendedMove}
-                  </div>
-                ) : frame.summary ? (
-                  <div className="max-w-4xl text-[2rem] font-semibold leading-tight text-foreground">
-                    {frame.summary}
-                  </div>
-                ) : null}
-
-                <div className="flex items-center gap-2 text-[1.75rem] font-medium leading-snug text-foreground/90">
-                  <UnreadDot visible={activeUnread} />
-                  <span>{renderTitle(frame)}</span>
-                </div>
-
-                {helperLine ? (
-                  <p className="max-w-3xl text-[0.95rem] leading-relaxed text-muted-foreground">
-                    {helperLine}
-                  </p>
-                ) : null}
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge className="border-border bg-secondary text-foreground/80">{impactLabel(frame)}</Badge>
-                  {driverLabel(frame) ? (
-                    <Badge className={driverBadge.className} style={driverBadge.style}>{driverLabel(frame)}</Badge>
-                  ) : null}
-                </div>
-
-                <div className="flex items-center gap-4 pt-1">
-                  <Accent><button
-                    type="button"
-                    onClick={() => setDetailsOpen(!detailsOpen)}
-                    aria-expanded={detailsOpen}
-                    className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
-                    style={{ color: "inherit" }}
-                  >
-                    <svg
-                      viewBox="0 0 16 16"
-                      className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
-                      fill="currentColor"
-                      aria-hidden="true"
-                    >
-                      <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
-                    </svg>
-                    {detailsOpen ? "Hide details" : "Show details"}
-                  </button></Accent>
-                </div>
+          <div className="space-y-5">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                <span>Now</span>
+                <span className="normal-case tracking-normal text-muted-foreground/70">{sourceLabel(frame)}</span>
               </div>
+
+              {recommendedMove ? (
+                <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
+                  {recommendedMove}
+                </div>
+              ) : frame.summary ? (
+                <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
+                  {frame.summary}
+                </div>
+              ) : null}
+
+              <div className="flex items-start gap-2 text-xl font-medium leading-snug text-foreground/80">
+                <UnreadDot visible={activeUnread} />
+                <span>{renderTitle(frame)}</span>
+              </div>
+
+              {helperLine ? (
+                <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                  {helperLine}
+                </p>
+              ) : null}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="border-border bg-secondary text-foreground/80">{impactLabel(frame)}</Badge>
+                {driverLabel(frame) ? (
+                  <Badge className={driverBadge.className} style={driverBadge.style}>{driverLabel(frame)}</Badge>
+                ) : null}
+              </div>
+
+              <InlineExplainability frame={frame} lane="active" />
 
               <NowActionRail
                 frame={frame}
@@ -1350,6 +1352,26 @@ function NowPane(props: {
                 onAcknowledge={props.onAcknowledge}
                 onComment={props.onComment}
               />
+            </div>
+
+            <div className="flex items-center gap-4">
+              <Accent><button
+                type="button"
+                onClick={() => setDetailsOpen(!detailsOpen)}
+                aria-expanded={detailsOpen}
+                className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
+                style={{ color: "inherit" }}
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  className={cn("h-3 w-3 transition-transform", detailsOpen && "rotate-90")}
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+                </svg>
+                {detailsOpen ? "Hide context" : "Show context"}
+              </button></Accent>
             </div>
 
             {detailsOpen ? (
@@ -1395,6 +1417,7 @@ function NextRow(props: {
   const driverBadge = driverBadgeStyle();
   const detailText = judgmentLine(frame, "queued");
   const showDetailText = detailText.trim().length > 0 && detailText !== secondaryText && detailText !== GENERIC_QUEUED_JUDGMENT;
+  const rankOpacity = Math.max(0.4, 1 - (props.rank - 1) * 0.14);
 
   return (
     <div className="border-b border-border/80 last:border-b-0" style={expanded ? { borderLeftWidth: 2, borderLeftColor: ACCENT_COLOR } : undefined}>
@@ -1404,14 +1427,16 @@ function NextRow(props: {
         aria-expanded={expanded}
         className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50 sm:px-6"
       >
-        <Accent className="w-5 shrink-0 text-xs font-medium tabular-nums">
-          {String(props.rank).padStart(2, "0")}
-        </Accent>
         <UnreadDot visible={unread} />
+        <span className="w-5 shrink-0" style={{ opacity: rankOpacity }}>
+          <Accent className="text-xs font-medium tabular-nums">
+            {String(props.rank).padStart(2, "0")}
+          </Accent>
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-foreground">{renderTitle(frame)}</div>
+          <div className="text-sm font-medium leading-5 text-foreground">{renderTitle(frame)}</div>
           {secondaryText ? (
-            <div className="truncate text-xs text-muted-foreground">{secondaryText}</div>
+            <div className="mt-0.5 max-w-3xl text-xs leading-5 text-muted-foreground">{secondaryText}</div>
           ) : null}
         </div>
         <QueueMovementBadge movement={props.movement} />
@@ -1432,7 +1457,7 @@ function NextRow(props: {
       </button>
 
       {expanded ? (
-        <div className="space-y-3 px-4 pb-3 pl-12 sm:px-6 sm:pl-14">
+        <div className="space-y-3 px-4 pb-4 pl-12 sm:px-6 sm:pl-14">
           {showDetailText ? (
             <p className="text-sm leading-relaxed text-muted-foreground">
               {detailText}
@@ -1461,16 +1486,18 @@ function NextRow(props: {
               </a>
             ) : null}
           </div>
-          <IssueCommentComposer frame={frame} pendingId={props.pendingId} onComment={props.onComment} />
-          <FrameActions
-            frame={frame}
-            lane="queued"
-            pendingId={props.pendingId}
-            onApprove={props.onApprove}
-            onReject={props.onReject}
-            onRequestRevision={props.onRequestRevision}
-            onAcknowledge={props.onAcknowledge}
-          />
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <IssueCommentComposer frame={frame} pendingId={props.pendingId} onComment={props.onComment} />
+            <FrameActions
+              frame={frame}
+              lane="queued"
+              pendingId={props.pendingId}
+              onApprove={props.onApprove}
+              onReject={props.onReject}
+              onRequestRevision={props.onRequestRevision}
+              onAcknowledge={props.onAcknowledge}
+            />
+          </div>
         </div>
       ) : null}
     </div>
@@ -1534,64 +1561,30 @@ function AmbientRow(props: {
   companyPrefix: string | null | undefined;
 }) {
   const { frame, snapshotUpdatedAt } = props;
-  const [expanded, setExpanded] = useState(false);
   const href = itemHref(frame, props.companyPrefix);
   const unread = isFrameUnreadInSnapshot(frame, props.snapshot);
-  const activityLink = activityHref(frame, props.companyPrefix);
+  const content = (
+    <div className="flex items-center gap-3 px-4 py-2.5 sm:px-6">
+      <span className="inline-flex h-2 w-2 shrink-0 rounded-full" style={unread ? { backgroundColor: `${ACCENT_COLOR}88` } : { backgroundColor: "transparent" }} />
+      <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
+        {renderTitle(frame)}
+      </span>
+      <span className="shrink-0 text-xs text-muted-foreground/80">{sourceLabel(frame)}</span>
+      <span className="shrink-0 text-xs text-muted-foreground/70">
+        {formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}
+      </span>
+    </div>
+  );
 
   return (
     <div style={{ borderBottomWidth: 1, borderBottomColor: "var(--border)" }} className="last:border-b-0">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-accent/50 sm:px-6"
-      >
-        <UnreadDot visible={unread} />
-        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground/80">{renderTitle(frame)}</span>
-        <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.6 }}>{sourceLabel(frame)}</span>
-        <span className="shrink-0 text-xs text-muted-foreground" style={{ opacity: 0.55 }}>
-          {formatRelativeTime(frameUpdatedAt(frame, snapshotUpdatedAt))}
-        </span>
-        <svg
-          viewBox="0 0 16 16"
-          className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")}
-          fill="currentColor"
-          style={{ opacity: 0.75 }}
-          aria-hidden="true"
-        >
-          <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
-        </svg>
-      </button>
-
-      {expanded ? (
-        <div className="space-y-3 px-4 pb-3 sm:px-6">
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            {frame.summary ?? judgmentLine(frame, "ambient")}
-          </p>
-          <div className="flex items-center gap-3">
-            {href ? (
-              <a
-                href={href}
-                className="text-xs font-medium underline underline-offset-2 text-muted-foreground hover:text-foreground"
-              >
-                {primaryLinkLabel(frame)}
-              </a>
-            ) : null}
-            {activityLink ? (
-              <a
-                href={activityLink}
-                className="text-xs font-medium underline underline-offset-2 text-muted-foreground hover:text-foreground"
-              >
-                Open activity
-              </a>
-            ) : null}
-            <span className="ml-auto text-xs uppercase tracking-[0.16em] text-muted-foreground/60">
-              Awareness only
-            </span>
-          </div>
-        </div>
-      ) : null}
+      {href ? (
+        <a href={href} className="block transition-colors hover:bg-accent/40">
+          {content}
+        </a>
+      ) : (
+        content
+      )}
     </div>
   );
 }
@@ -1603,14 +1596,15 @@ function AmbientLane(props: {
   companyPrefix: string | null | undefined;
 }) {
   return (
-    <section style={{ borderWidth: 1, borderColor: "var(--border)" }} className="bg-card" aria-label="Ambient attention">
+    <section style={{ borderWidth: 1, borderColor: "var(--border)" }} className="mt-2 bg-card" aria-label="Ambient attention">
       <div style={{ borderBottomWidth: 1, borderBottomColor: "var(--border)" }} className="px-4 py-2.5 sm:px-6">
-        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground" style={{ opacity: 0.6 }}>Ambient</h2>
+        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground/80">Ambient</h2>
       </div>
 
       {props.rows.length === 0 ? (
-        <div className="px-4 py-4 text-sm text-muted-foreground sm:px-6" style={{ opacity: 0.4 }}>
-          Nothing in peripheral view.
+        <div className="flex items-center gap-3 px-4 py-4 text-sm text-muted-foreground sm:px-6">
+          <QuietMark />
+          <span>Nothing in peripheral view.</span>
         </div>
       ) : (
         props.rows.map((row) => (
@@ -1634,6 +1628,7 @@ function AmbientLane(props: {
 export function DashboardWidget(props: PluginWidgetProps) {
   const companyId = props.context.companyId;
   const brand = currentSurfaceBrand();
+  const href = pluginPagePath(props.context.companyPrefix);
   const model = useAttentionModel(companyId);
   const data = model.snapshot;
   const loading = model.loading;
@@ -1645,9 +1640,16 @@ export function DashboardWidget(props: PluginWidgetProps) {
   if (!data) return <MessageCard title={brand.wordmark} body={brand.headingEmptyState} />;
 
   const posture = postureForSnapshot(data);
+  const leadingText = data.active ? (recommendedMoveValue(data.active) ?? data.active.title) : null;
+  const borderStyle =
+    posture.label === "busy"
+      ? { borderLeftWidth: 2, borderLeftColor: ACCENT_COLOR }
+      : posture.label === "elevated"
+        ? { borderLeftWidth: 2, borderLeftColor: ACCENT_BORDER }
+        : undefined;
 
   return (
-    <div className="border border-border bg-card px-4 py-2.5 shadow-sm">
+    <a href={href} className="block border border-border bg-card px-4 py-3 shadow-sm transition-colors hover:bg-accent/40" style={borderStyle}>
       <div className="flex items-start gap-2 text-xs">
         <Accent className="pt-0.5 text-sm">{posture.glyph}</Accent>
         <div className="min-w-0">
@@ -1656,18 +1658,17 @@ export function DashboardWidget(props: PluginWidgetProps) {
             <Accent className="text-[11px]">{posture.label}</Accent>
             {unreadCount(data) > 0 ? <Accent className="text-[11px]">new {unreadCount(data)}</Accent> : null}
           </div>
-          <div className="mt-0.5 text-[10px] leading-none text-muted-foreground/60">{brand.supportCopy}</div>
         </div>
         <span className="ml-auto tabular-nums text-muted-foreground">
           now {data.counts.active} · next {data.counts.queued} · ambient {data.counts.ambient}
         </span>
       </div>
-      {data.active ? (
-        <div className="mt-2 truncate text-sm font-medium text-foreground">{data.active.title}</div>
+      {leadingText ? (
+        <div className="mt-2 text-sm font-medium leading-5 text-foreground">{leadingText}</div>
       ) : (
         <div className="mt-2 text-sm text-muted-foreground">No active interruption right now.</div>
       )}
-    </div>
+    </a>
   );
 }
 
@@ -1717,9 +1718,18 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
       </span>
       <span className="flex-1 truncate">{brand.wordmark}</span>
       {(unread > 0 || actionable > 0) ? (
-        <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
-          {unread > 0 ? unread : actionable}
-        </span>
+        unread > 0 ? (
+          <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
+            {unread}
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-xs leading-none font-medium"
+            style={{ color: ACCENT_COLOR, borderColor: ACCENT_BORDER, backgroundColor: "transparent" }}
+          >
+            {actionable}
+          </span>
+        )
       ) : null}
     </a>
   );
@@ -1938,7 +1948,7 @@ export function AttentionPage(props: PluginPageProps) {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <NowPane
         snapshot={displaySnapshot}
         posture={posture}
