@@ -767,7 +767,7 @@ function ActionButton(props: {
     props.tone === "primary"
       ? "bg-green-700 text-white hover:bg-green-600"
       : props.tone === "accent"
-        ? "text-white hover:opacity-90"
+        ? "text-white hover:brightness-110"
       : props.tone === "danger"
         ? "bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
         : "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50";
@@ -779,7 +779,7 @@ function ActionButton(props: {
       disabled={props.disabled}
       className={cn(
         "inline-flex h-8 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium",
-        "transition-[color,background-color,border-color,box-shadow,opacity]",
+        "transition-[color,background-color,border-color,box-shadow,opacity,filter]",
         "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
         "disabled:pointer-events-none disabled:opacity-50",
         props.disabled && /…|\.\.\./.test(props.label) && "animate-pulse",
@@ -867,8 +867,12 @@ function FrameActions(props: {
 // Now pane — stable focal placement with progressive disclosure
 // ---------------------------------------------------------------------------
 
+function visibleContextItems(frame: StoredAttentionFrame) {
+  return (frame.context?.items ?? []).filter((item) => item.id !== ATTENTION_CONTEXT_IDS.recommendedMove);
+}
+
 function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
-  const items = (frame.context?.items ?? []).filter((item) => item.id !== ATTENTION_CONTEXT_IDS.recommendedMove);
+  const items = visibleContextItems(frame);
   if (items.length === 0) return null;
 
   return (
@@ -878,9 +882,7 @@ function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
           key={item.id}
           className={cn(
             "border border-border bg-secondary/50 px-3 py-2",
-            (
-              item.id === ATTENTION_CONTEXT_IDS.latestComment
-            ) && "md:col-span-2",
+            item.id === ATTENTION_CONTEXT_IDS.latestComment && "md:col-span-2",
           )}
         >
           <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
@@ -943,11 +945,11 @@ function ExplainabilityPanel(props: {
 }) {
   const explanation = explainFrame(props.frame, props.lane);
   const strength = explanation.signalStrength ? signalStrengthLabel(explanation.signalStrength) : null;
-  const reasoningLabel = props.lane === "active" ? "Decision reasoning" : props.lane === "queued" ? "Queue reasoning" : "Ambient reasoning";
+  const reasoningLabel = props.lane === "active" ? "Reasoning" : props.lane === "queued" ? "Why it sits here" : "Why it stays quiet";
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
         <div>
           <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
             {reasoningLabel}
@@ -1099,6 +1101,7 @@ function NowDetails(props: {
   const href = itemHref(frame, props.companyPrefix);
   const budgetHref = isBudgetOverride(frame) ? costsHref(props.companyPrefix) : null;
   const activityLink = activityHref(frame, props.companyPrefix);
+  const hasContext = visibleContextItems(frame).length > 0;
 
   return (
     <div className="space-y-3 border-t border-border pt-4">
@@ -1112,10 +1115,14 @@ function NowDetails(props: {
         {budgetReason(frame) ? <span>{budgetReason(frame)}</span> : null}
       </div>
 
-      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-        Context
-      </div>
-      <ContextItems frame={frame} />
+      {hasContext ? (
+        <>
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            Context
+          </div>
+          <ContextItems frame={frame} />
+        </>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         {href ? (
@@ -1184,7 +1191,7 @@ function NowActionRail(props: {
   const commentEnabled = actionMode === "acknowledge" && isIssueFrame(props.frame);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 rounded-md border border-border/60 bg-secondary/20 px-3 py-3">
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
       </div>
@@ -1339,7 +1346,7 @@ function NowPane(props: {
                 ) : null}
               </div>
 
-              <InlineExplainability frame={frame} lane="active" />
+              {!detailsOpen ? <InlineExplainability frame={frame} lane="active" /> : null}
 
               <NowActionRail
                 frame={frame}
@@ -1583,7 +1590,9 @@ function AmbientRow(props: {
           {content}
         </a>
       ) : (
-        content
+        <div role="status" aria-label={compactTitle(frame)}>
+          {content}
+        </div>
       )}
     </div>
   );
@@ -1664,7 +1673,17 @@ export function DashboardWidget(props: PluginWidgetProps) {
         </span>
       </div>
       {leadingText ? (
-        <div className="mt-2 text-sm font-medium leading-5 text-foreground">{leadingText}</div>
+        <div
+          className="mt-2 text-sm font-medium leading-5 text-foreground"
+          style={{
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {leadingText}
+        </div>
       ) : (
         <div className="mt-2 text-sm text-muted-foreground">No active interruption right now.</div>
       )}
