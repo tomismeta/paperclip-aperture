@@ -1038,10 +1038,15 @@ function IssueCommentComposer(props: {
 }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   if (!isIssueFrame(props.frame)) return null;
 
   const isPending = props.pendingId === props.frame.id;
+
+  useEffect(() => {
+    if (open) textareaRef.current?.focus();
+  }, [open]);
 
   async function submit() {
     const nextBody = body.trim();
@@ -1080,18 +1085,33 @@ function IssueCommentComposer(props: {
 
   return (
     <div className="w-full space-y-2 border border-border bg-secondary/40 p-3">
+      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+        Posts to the issue thread
+      </div>
       <textarea
+        ref={textareaRef}
         value={body}
         onChange={(event) => setBody(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            void submit();
+          }
+
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setOpen(false);
+            setBody("");
+          }
+        }}
         rows={3}
         placeholder="Add a short operator note back to the issue…"
         className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none transition focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
       />
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex items-center justify-end gap-2">
         <ActionButton
           label="Cancel"
           tone="secondary"
-          className="w-full"
           disabled={isPending}
           onClick={() => {
             setOpen(false);
@@ -1101,7 +1121,6 @@ function IssueCommentComposer(props: {
         <ActionButton
           label={isPending ? "Posting…" : "Post comment"}
           tone="accent"
-          className="w-full"
           disabled={isPending || body.trim().length === 0}
           onClick={() => void submit()}
         />
@@ -1207,68 +1226,158 @@ function NowActionRail(props: {
   const actionMode = responseKind(props.frame, props.lane);
   const isPending = props.pendingId === props.frame.id;
   const commentEnabled = actionMode === "acknowledge" && isIssueFrame(props.frame);
+  const [commentOpen, setCommentOpen] = useState(false);
+  const [commentBody, setCommentBody] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [wideLayout, setWideLayout] = useState(false);
+  const splitLayout = commentOpen && wideLayout;
+
+  useEffect(() => {
+    setCommentOpen(false);
+    setCommentBody("");
+  }, [props.frame.id]);
+
+  useEffect(() => {
+    if (commentOpen) textareaRef.current?.focus();
+  }, [commentOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+
+    const query = window.matchMedia("(min-width: 1024px)");
+    const update = () => setWideLayout(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  async function submitComment() {
+    const nextBody = commentBody.trim();
+    if (!nextBody) return;
+    await props.onComment(props.frame, nextBody);
+    setCommentBody("");
+    setCommentOpen(false);
+  }
 
   return (
     <div className="space-y-3 rounded-md border border-border/60 bg-secondary/20 px-3 py-3">
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {commentEnabled ? (
-          <IssueCommentComposer
-            frame={props.frame}
-            pendingId={props.pendingId}
-            onComment={props.onComment}
-            triggerTone="accent"
-            triggerLabel="Comment"
-            triggerFullWidth={false}
-          />
-        ) : null}
-
-        {actionMode === "approval" ? (
-          <>
-            {isBudgetOverride(props.frame) ? (
+      <div
+        className={cn("space-y-3", splitLayout && "space-y-0")}
+        style={splitLayout ? { display: "flex", alignItems: "flex-start", gap: 12 } : undefined}
+      >
+        <div
+          className="space-y-3"
+          style={splitLayout ? { minWidth: 0, flex: 1 } : undefined}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {commentEnabled ? (
               <ActionButton
-                label="Request revision"
-                tone="secondary"
+                label="Comment"
+                tone="accent"
                 disabled={isPending}
-                onClick={() => void props.onRequestRevision(props.frame)}
+                onClick={() => setCommentOpen(true)}
               />
             ) : null}
-            <ActionButton
-              label={isPending ? "Submitting…" : "Approve"}
-              tone="primary"
-              disabled={isPending}
-              onClick={() => void props.onApprove(props.frame)}
-            />
-            <ActionButton
-              label="Reject"
-              tone="danger"
-              disabled={isPending}
-              onClick={() => void props.onReject(props.frame)}
-            />
-          </>
-        ) : actionMode === "acknowledge" ? (
-          <ActionButton
-            label={isPending ? "Saving…" : "Acknowledge"}
-            tone="accent"
-            disabled={isPending}
-            onClick={() => void props.onAcknowledge(props.frame)}
-          />
-        ) : null}
 
+            {actionMode === "approval" ? (
+              <>
+                {isBudgetOverride(props.frame) ? (
+                  <ActionButton
+                    label="Request revision"
+                    tone="secondary"
+                    disabled={isPending}
+                    onClick={() => void props.onRequestRevision(props.frame)}
+                  />
+                ) : null}
+                <ActionButton
+                  label={isPending ? "Submitting…" : "Approve"}
+                  tone="primary"
+                  disabled={isPending}
+                  onClick={() => void props.onApprove(props.frame)}
+                />
+                <ActionButton
+                  label="Reject"
+                  tone="danger"
+                  disabled={isPending}
+                  onClick={() => void props.onReject(props.frame)}
+                />
+              </>
+            ) : actionMode === "acknowledge" ? (
+              <ActionButton
+                label={isPending ? "Saving…" : "Acknowledge"}
+                tone="accent"
+                disabled={isPending}
+                onClick={() => void props.onAcknowledge(props.frame)}
+              />
+            ) : null}
+          </div>
+          {props.itemLink ? (
+            <a
+              href={props.itemLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              {primaryLinkLabel(props.frame)}
+              <ExternalLinkIcon />
+            </a>
+          ) : null}
+        </div>
+
+        {commentOpen ? (
+          <div
+            className="space-y-2 rounded-md border border-border bg-background/80 p-3"
+            style={splitLayout ? { width: 384, flexShrink: 0 } : undefined}
+          >
+            <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+              Commenting on {compactTitle(props.frame)}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Posts to the issue thread without leaving Focus.
+            </div>
+            <textarea
+              ref={textareaRef}
+              value={commentBody}
+              onChange={(event) => setCommentBody(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  void submitComment();
+                }
+
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setCommentOpen(false);
+                  setCommentBody("");
+                }
+              }}
+              rows={4}
+              placeholder="Add a short operator note back to the issue…"
+              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none transition focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <ActionButton
+                label="Cancel"
+                tone="secondary"
+                disabled={isPending}
+                onClick={() => {
+                  setCommentOpen(false);
+                  setCommentBody("");
+                }}
+              />
+              <ActionButton
+                label={isPending ? "Posting…" : "Post comment"}
+                tone="accent"
+                disabled={isPending || commentBody.trim().length === 0}
+                onClick={() => void submitComment()}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
-      {props.itemLink ? (
-        <a
-          href={props.itemLink}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-        >
-          {primaryLinkLabel(props.frame)}
-          <ExternalLinkIcon />
-        </a>
-      ) : null}
     </div>
   );
 }
