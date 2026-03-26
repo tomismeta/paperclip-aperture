@@ -80,7 +80,7 @@ and agents                             attention now?    actually sees     to th
 
 Focus is meant to be more legible than a smart inbox.
 
-The first `0.3.0` explainability slice keeps reasoning attached to the cards you are already acting on:
+The current `0.3.x` explainability slice keeps reasoning attached to the cards you are already acting on:
 
 - `Why now` on the active card explains why the current item outranks the rest of the queue
 - `Why next` on queued rows explains why something is staged behind the current top item
