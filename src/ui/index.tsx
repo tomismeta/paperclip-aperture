@@ -104,6 +104,22 @@ function QuietMark({ size = "sm" }: { size?: "sm" | "md" }) {
   );
 }
 
+function useWideLayout(minWidth = 1024) {
+  const [matches, setMatches] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+
+    const query = window.matchMedia(`(min-width: ${minWidth}px)`);
+    const update = () => setMatches(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, [minWidth]);
+
+  return matches;
+}
+
 function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
@@ -1215,6 +1231,7 @@ function QuietNow() {
 function NowActionRail(props: {
   frame: StoredAttentionFrame;
   lane: FrameLane;
+  wide?: boolean;
   pendingId: string | null;
   itemLink: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
@@ -1229,8 +1246,6 @@ function NowActionRail(props: {
   const [commentOpen, setCommentOpen] = useState(false);
   const [commentBody, setCommentBody] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [wideLayout, setWideLayout] = useState(false);
-  const splitLayout = commentOpen && wideLayout;
 
   useEffect(() => {
     setCommentOpen(false);
@@ -1241,16 +1256,6 @@ function NowActionRail(props: {
     if (commentOpen) textareaRef.current?.focus();
   }, [commentOpen]);
 
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-
-    const query = window.matchMedia("(min-width: 1024px)");
-    const update = () => setWideLayout(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
   async function submitComment() {
     const nextBody = commentBody.trim();
     if (!nextBody) return;
@@ -1260,124 +1265,113 @@ function NowActionRail(props: {
   }
 
   return (
-    <div className="space-y-3 rounded-md border border-border/60 bg-secondary/20 px-3 py-3">
+    <div
+      className="space-y-3 rounded-md border border-border/60 bg-secondary/20 px-3 py-3"
+      style={props.wide ? { width: 336, flexShrink: 0 } : undefined}
+    >
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
       </div>
-      <div
-        className={cn("space-y-3", splitLayout && "space-y-0")}
-        style={splitLayout ? { display: "flex", alignItems: "flex-start", gap: 12 } : undefined}
-      >
-        <div
-          className="space-y-3"
-          style={splitLayout ? { minWidth: 0, flex: 1 } : undefined}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            {commentEnabled ? (
-              <ActionButton
-                label="Comment"
-                tone="accent"
-                disabled={isPending}
-                onClick={() => setCommentOpen(true)}
-              />
-            ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        {commentEnabled ? (
+          <ActionButton
+            label="Comment"
+            tone="accent"
+            disabled={isPending}
+            onClick={() => setCommentOpen(true)}
+          />
+        ) : null}
 
-            {actionMode === "approval" ? (
-              <>
-                {isBudgetOverride(props.frame) ? (
-                  <ActionButton
-                    label="Request revision"
-                    tone="secondary"
-                    disabled={isPending}
-                    onClick={() => void props.onRequestRevision(props.frame)}
-                  />
-                ) : null}
-                <ActionButton
-                  label={isPending ? "Submitting…" : "Approve"}
-                  tone="primary"
-                  disabled={isPending}
-                  onClick={() => void props.onApprove(props.frame)}
-                />
-                <ActionButton
-                  label="Reject"
-                  tone="danger"
-                  disabled={isPending}
-                  onClick={() => void props.onReject(props.frame)}
-                />
-              </>
-            ) : actionMode === "acknowledge" ? (
+        {actionMode === "approval" ? (
+          <>
+            {isBudgetOverride(props.frame) ? (
               <ActionButton
-                label={isPending ? "Saving…" : "Acknowledge"}
-                tone="accent"
-                disabled={isPending}
-                onClick={() => void props.onAcknowledge(props.frame)}
-              />
-            ) : null}
-          </div>
-          {props.itemLink ? (
-            <a
-              href={props.itemLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-            >
-              {primaryLinkLabel(props.frame)}
-              <ExternalLinkIcon />
-            </a>
-          ) : null}
-        </div>
-
-        {commentOpen ? (
-          <div
-            className="space-y-2 rounded-md border border-border bg-background/80 p-3"
-            style={splitLayout ? { width: 384, flexShrink: 0 } : undefined}
-          >
-            <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-              Commenting on {compactTitle(props.frame)}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              Posts to the issue thread without leaving Focus.
-            </div>
-            <textarea
-              ref={textareaRef}
-              value={commentBody}
-              onChange={(event) => setCommentBody(event.target.value)}
-              onKeyDown={(event) => {
-                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                  event.preventDefault();
-                  void submitComment();
-                }
-
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setCommentOpen(false);
-                  setCommentBody("");
-                }
-              }}
-              rows={4}
-              placeholder="Add a short operator note back to the issue…"
-              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none transition focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-            />
-            <div className="flex items-center justify-end gap-2">
-              <ActionButton
-                label="Cancel"
+                label="Request revision"
                 tone="secondary"
                 disabled={isPending}
-                onClick={() => {
-                  setCommentOpen(false);
-                  setCommentBody("");
-                }}
+                onClick={() => void props.onRequestRevision(props.frame)}
               />
-              <ActionButton
-                label={isPending ? "Posting…" : "Post comment"}
-                tone="accent"
-                disabled={isPending || commentBody.trim().length === 0}
-                onClick={() => void submitComment()}
-              />
-            </div>
-          </div>
+            ) : null}
+            <ActionButton
+              label={isPending ? "Submitting…" : "Approve"}
+              tone="primary"
+              disabled={isPending}
+              onClick={() => void props.onApprove(props.frame)}
+            />
+            <ActionButton
+              label="Reject"
+              tone="danger"
+              disabled={isPending}
+              onClick={() => void props.onReject(props.frame)}
+            />
+          </>
+        ) : actionMode === "acknowledge" ? (
+          <ActionButton
+            label={isPending ? "Saving…" : "Acknowledge"}
+            tone="accent"
+            disabled={isPending}
+            onClick={() => void props.onAcknowledge(props.frame)}
+          />
         ) : null}
       </div>
+      {props.itemLink ? (
+        <a
+          href={props.itemLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {primaryLinkLabel(props.frame)}
+          <ExternalLinkIcon />
+        </a>
+      ) : null}
+      {commentOpen ? (
+        <div className="space-y-2 rounded-md border border-border bg-background/80 p-3">
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            Commenting on {compactTitle(props.frame)}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Posts to the issue thread without leaving Focus.
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={commentBody}
+            onChange={(event) => setCommentBody(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void submitComment();
+              }
+
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setCommentOpen(false);
+                setCommentBody("");
+              }
+            }}
+            rows={4}
+            placeholder="Add a short operator note back to the issue…"
+            className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none transition focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+          />
+          <div className="flex items-center justify-end gap-2">
+            <ActionButton
+              label="Cancel"
+              tone="secondary"
+              disabled={isPending}
+              onClick={() => {
+                setCommentOpen(false);
+                setCommentBody("");
+              }}
+            />
+            <ActionButton
+              label={isPending ? "Posting…" : "Post comment"}
+              tone="accent"
+              disabled={isPending || commentBody.trim().length === 0}
+              onClick={() => void submitComment()}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1397,6 +1391,7 @@ function NowPane(props: {
 }) {
   const frame = props.snapshot.active;
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const wideLayout = useWideLayout();
   const activeFrameId = frame?.id ?? null;
   const activeUnread = !!frame && (props.snapshot.review?.unread.active ?? 0) > 0;
   const itemLink = frame ? itemHref(frame, props.companyPrefix) : null;
@@ -1439,45 +1434,50 @@ function NowPane(props: {
           <QuietNow />
         ) : (
           <div className="space-y-5">
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                <span>Now</span>
-                <span className="normal-case tracking-normal text-muted-foreground/70">{sourceLabel(frame)}</span>
-              </div>
-
-              {recommendedMove ? (
-                <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
-                  {recommendedMove}
+            <div
+              className={wideLayout ? "flex items-start gap-6" : "space-y-4"}
+            >
+              <div className="space-y-4" style={wideLayout ? { minWidth: 0, flex: 1 } : undefined}>
+                <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  <span>Now</span>
+                  <span className="normal-case tracking-normal text-muted-foreground/70">{sourceLabel(frame)}</span>
                 </div>
-              ) : frame.summary ? (
-                <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
-                  {frame.summary}
-                </div>
-              ) : null}
 
-              <div className="flex items-start gap-2 text-xl font-medium leading-snug text-foreground/80">
-                <UnreadDot visible={activeUnread} />
-                <span>{renderTitle(frame)}</span>
-              </div>
-
-              {helperLine ? (
-                <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
-                  {helperLine}
-                </p>
-              ) : null}
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge className="border-border bg-secondary text-foreground/80">{impactLabel(frame)}</Badge>
-                {driverLabel(frame) ? (
-                  <Badge className={driverBadge.className} style={driverBadge.style}>{driverLabel(frame)}</Badge>
+                {recommendedMove ? (
+                  <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
+                    {recommendedMove}
+                  </div>
+                ) : frame.summary ? (
+                  <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
+                    {frame.summary}
+                  </div>
                 ) : null}
-              </div>
 
-              <InlineExplainability frame={frame} lane="active" />
+                <div className="flex items-start gap-2 text-xl font-medium leading-snug text-foreground/80">
+                  <UnreadDot visible={activeUnread} />
+                  <span>{renderTitle(frame)}</span>
+                </div>
+
+                {helperLine ? (
+                  <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                    {helperLine}
+                  </p>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="border-border bg-secondary text-foreground/80">{impactLabel(frame)}</Badge>
+                  {driverLabel(frame) ? (
+                    <Badge className={driverBadge.className} style={driverBadge.style}>{driverLabel(frame)}</Badge>
+                  ) : null}
+                </div>
+
+                <InlineExplainability frame={frame} lane="active" />
+              </div>
 
               <NowActionRail
                 frame={frame}
                 lane="active"
+                wide={wideLayout}
                 pendingId={props.pendingId}
                 itemLink={itemLink}
                 onApprove={props.onApprove}
