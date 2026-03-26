@@ -56,7 +56,6 @@ type SurfaceLabel = "focus";
 type SurfaceBrand = {
   key: SurfaceLabel;
   wordmark: string;
-  supportCopy: string;
   headingEmptyState: string;
   loadingLabel: string;
 };
@@ -73,7 +72,6 @@ function currentSurfaceBrand(): SurfaceBrand {
   return {
     key: "focus",
     wordmark: "Focus",
-    supportCopy: "Powered by Aperture",
     headingEmptyState: "No focus state yet.",
     loadingLabel: "Loading Focus…",
   };
@@ -379,9 +377,17 @@ function isFrameUnreadInSnapshot(frame: StoredAttentionFrame, snapshot: Attentio
   return frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(seenAt) > 0;
 }
 
-function UnreadDot({ visible }: { visible: boolean }) {
-  if (!visible) return null;
-  return <span className="inline-block h-2 w-2 rounded-full shrink-0" style={ACCENT_BG_STYLE} aria-label="Unread attention item" />;
+function UnreadDot(props: { visible: boolean; tone?: "default" | "muted"; reserveSpace?: boolean }) {
+  const tone = props.tone ?? "default";
+  if (!props.visible && !props.reserveSpace) return null;
+
+  const style = props.visible
+    ? tone === "muted"
+      ? { backgroundColor: ACCENT_BORDER }
+      : ACCENT_BG_STYLE
+    : { backgroundColor: "transparent" };
+
+  return <span className="inline-block h-2 w-2 rounded-full shrink-0" style={style} aria-label={props.visible ? "Unread attention item" : undefined} />;
 }
 
 function ExternalLinkIcon() {
@@ -763,11 +769,12 @@ function ActionButton(props: {
   className?: string;
   onClick: () => void;
 }) {
+  const [hovered, setHovered] = useState(false);
   const toneClass =
     props.tone === "primary"
       ? "bg-green-700 text-white hover:bg-green-600"
       : props.tone === "accent"
-        ? "text-white hover:brightness-110"
+        ? "text-white"
       : props.tone === "danger"
         ? "bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
         : "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50";
@@ -776,6 +783,8 @@ function ActionButton(props: {
     <button
       type="button"
       onClick={props.onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       disabled={props.disabled}
       className={cn(
         "inline-flex h-8 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium",
@@ -786,7 +795,7 @@ function ActionButton(props: {
         toneClass,
         props.className,
       )}
-      style={props.tone === "accent" ? ACCENT_BG_STYLE : undefined}
+      style={props.tone === "accent" ? { ...ACCENT_BG_STYLE, filter: hovered && !props.disabled ? "brightness(1.08)" : undefined } : undefined}
     >
       {props.label}
     </button>
@@ -942,45 +951,54 @@ function InlineExplainability(props: {
 function ExplainabilityPanel(props: {
   frame: StoredAttentionFrame;
   lane: FrameLane;
+  detailOnly?: boolean;
 }) {
   const explanation = explainFrame(props.frame, props.lane);
-  const strength = explanation.signalStrength ? signalStrengthLabel(explanation.signalStrength) : null;
+  const strength = !props.detailOnly && explanation.signalStrength ? signalStrengthLabel(explanation.signalStrength) : null;
+  const signalValues = props.detailOnly ? explanation.signals.slice(2) : explanation.signals;
+  const relationValues = props.detailOnly ? explanation.relationLabels.slice(1) : explanation.relationLabels;
   const reasoningLabel = props.lane === "active" ? "Reasoning" : props.lane === "queued" ? "Why it sits here" : "Why it stays quiet";
+
+  if (props.detailOnly && signalValues.length === 0 && relationValues.length === 0 && !explanation.continuity) {
+    return null;
+  }
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            {reasoningLabel}
-          </div>
-          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            {explanation.laneReason}
-          </p>
-        </div>
-        {strength ? (
+      {!props.detailOnly ? (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
           <div>
             <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-              Confidence
+              {reasoningLabel}
             </div>
-            <p className="mt-1 text-sm text-foreground/90">{strength}</p>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+              {explanation.laneReason}
+            </p>
           </div>
-        ) : null}
-      </div>
-      {explanation.signals.length > 0 ? (
-        <div className="space-y-2">
-          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            Signals
-          </div>
-          <ExplainabilityBadges values={explanation.signals} />
+          {strength ? (
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                Confidence
+              </div>
+              <p className="mt-1 text-sm text-foreground/90">{strength}</p>
+            </div>
+          ) : null}
         </div>
       ) : null}
-      {explanation.relationLabels.length > 0 ? (
+      {signalValues.length > 0 ? (
         <div className="space-y-2">
           <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            Thread context
+            {props.detailOnly ? "More signals" : "Signals"}
           </div>
-          <ExplainabilityBadges values={explanation.relationLabels} accent />
+          <ExplainabilityBadges values={signalValues} />
+        </div>
+      ) : null}
+      {relationValues.length > 0 ? (
+        <div className="space-y-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+            {props.detailOnly ? "More thread context" : "Thread context"}
+          </div>
+          <ExplainabilityBadges values={relationValues} accent />
         </div>
       ) : null}
       {explanation.continuity ? (
@@ -1105,7 +1123,7 @@ function NowDetails(props: {
 
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      <ExplainabilityPanel frame={frame} lane="active" />
+      <ExplainabilityPanel frame={frame} lane="active" detailOnly />
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span>{requestDescriptor(frame)}</span>
@@ -1239,18 +1257,18 @@ function NowActionRail(props: {
           />
         ) : null}
 
-        {props.itemLink ? (
-          <a
-            href={props.itemLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          >
-            {primaryLinkLabel(props.frame)}
-            <ExternalLinkIcon />
-          </a>
-        ) : null}
       </div>
+      {props.itemLink ? (
+        <a
+          href={props.itemLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {primaryLinkLabel(props.frame)}
+          <ExternalLinkIcon />
+        </a>
+      ) : null}
     </div>
   );
 }
@@ -1346,7 +1364,7 @@ function NowPane(props: {
                 ) : null}
               </div>
 
-              {!detailsOpen ? <InlineExplainability frame={frame} lane="active" /> : null}
+              <InlineExplainability frame={frame} lane="active" />
 
               <NowActionRail
                 frame={frame}
@@ -1572,7 +1590,7 @@ function AmbientRow(props: {
   const unread = isFrameUnreadInSnapshot(frame, props.snapshot);
   const content = (
     <div className="flex items-center gap-3 px-4 py-2.5 sm:px-6">
-      <span className="inline-flex h-2 w-2 shrink-0 rounded-full" style={unread ? { backgroundColor: `${ACCENT_COLOR}88` } : { backgroundColor: "transparent" }} />
+      <UnreadDot visible={unread} tone="muted" reserveSpace />
       <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
         {renderTitle(frame)}
       </span>
@@ -1590,9 +1608,7 @@ function AmbientRow(props: {
           {content}
         </a>
       ) : (
-        <div role="status" aria-label={compactTitle(frame)}>
-          {content}
-        </div>
+        content
       )}
     </div>
   );
