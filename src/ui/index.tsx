@@ -270,6 +270,18 @@ function supportingLine(frame: StoredAttentionFrame, lane: FrameLane): string | 
     return issueNeedsActionFromLine(owner);
   }
 
+  if (lane === "active") {
+    const recommendedMove = recommendedMoveValue(frame)?.trim();
+    const summary = frame.summary?.trim();
+    const judgment = judgmentLine(frame, lane).trim();
+
+    if (recommendedMove && summary && summary !== recommendedMove && summary !== judgment) {
+      return summary;
+    }
+
+    return null;
+  }
+
   const judgment = judgmentLine(frame, lane);
   return judgment.trim().length > 0 ? judgment : null;
 }
@@ -939,6 +951,7 @@ function ExplainabilityBadges(props: { values: string[]; accent?: boolean }) {
 function InlineExplainability(props: {
   frame: StoredAttentionFrame;
   lane: FrameLane;
+  preferLaneReason?: boolean;
 }) {
   const explanation = explainFrame(props.frame, props.lane);
   const chips = [
@@ -947,6 +960,13 @@ function InlineExplainability(props: {
     ...explanation.relationLabels.slice(0, 1),
   ];
   const label = props.lane === "queued" ? "Why next" : props.lane === "ambient" ? "Why ambient" : "Why now";
+  const whyNow = explanation.whyNow ?? judgmentLine(props.frame, props.lane);
+  const primaryLine = props.lane === "active"
+    ? (props.preferLaneReason ? explanation.laneReason : whyNow)
+    : whyNow;
+  const secondaryLine = props.lane === "active"
+    ? (!props.preferLaneReason && whyNow !== explanation.laneReason ? explanation.laneReason : null)
+    : explanation.laneReason;
 
   return (
     <div className="space-y-2 border-l-2 pl-4" style={{ borderColor: ACCENT_COLOR }}>
@@ -954,11 +974,13 @@ function InlineExplainability(props: {
         {label}
       </div>
       <p className="max-w-3xl text-sm leading-relaxed text-foreground/90">
-        {explanation.whyNow ?? judgmentLine(props.frame, props.lane)}
+        {primaryLine}
       </p>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        {explanation.laneReason}
-      </p>
+      {secondaryLine ? (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {secondaryLine}
+        </p>
+      ) : null}
       {chips.length > 0 ? <ExplainabilityBadges values={chips} accent /> : null}
     </div>
   );
@@ -1477,7 +1499,7 @@ function NowPane(props: {
                   ) : null}
                 </div>
 
-                <InlineExplainability frame={frame} lane="active" />
+                <InlineExplainability frame={frame} lane="active" preferLaneReason={!!helperLine} />
 
                 <div className="flex items-center gap-4">
                   <Accent><button
