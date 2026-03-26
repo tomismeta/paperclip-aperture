@@ -1300,17 +1300,6 @@ function NowActionRail(props: {
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
       </div>
-      {commentEnabled ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <ActionButton
-            label="Comment"
-            tone="accent"
-            disabled={isPending}
-            onClick={() => setCommentOpen(true)}
-          />
-        </div>
-      ) : null}
-
       {actionMode === "approval" ? (
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
@@ -1341,6 +1330,14 @@ function NowActionRail(props: {
         </div>
       ) : actionMode === "acknowledge" ? (
         <div className="flex flex-wrap items-center gap-2">
+          {commentEnabled ? (
+            <ActionButton
+              label="Comment"
+              tone="accent"
+              disabled={isPending}
+              onClick={() => setCommentOpen(true)}
+            />
+          ) : null}
           <ActionButton
             label={isPending ? "Saving…" : "Acknowledge"}
             tone="accent"
