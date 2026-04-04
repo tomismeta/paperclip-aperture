@@ -128,7 +128,7 @@ export function mergeSnapshotWithApprovals(
   const approvalFrames = actionableApprovalRecords(approvals).map(approvalRecordToFrame);
   const base = snapshot ?? createEmptySnapshot(companyId);
   const merged = mergeStoredFrames(base, companyId, [
-    ...approvalFrames.map((frame, index) => ({ frame, lane: index === 0 ? "active" as const : "queued" as const })),
+    ...approvalFrames.map((frame, index) => ({ frame, lane: index === 0 ? "now" as const : "next" as const })),
   ], review);
   return merged;
 }

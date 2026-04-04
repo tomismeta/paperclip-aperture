@@ -102,8 +102,8 @@ function issueLane(issue: Issue, comment: LatestComment, evidence: IssueFrameEvi
   ) {
     return comment || issue.isUnreadForMe || evidence.documentSignal.hasDocuments ? "ambient" : null;
   }
-  if (issue.status === "blocked") return issue.priority === "critical" ? "active" : "queued";
-  if (issue.status === "in_review") return "queued";
+  if (issue.status === "blocked") return issue.priority === "critical" ? "now" : "next";
+  if (issue.status === "in_review") return "next";
   if (comment || issue.isUnreadForMe) return "ambient";
   return null;
 }
@@ -199,9 +199,9 @@ function issueFrame(
 }
 
 function agentLane(agent: Agent): FrameLane | null {
-  if (agent.status === "error") return "active";
-  if (agent.status === "pending_approval") return "queued";
-  if (agent.status === "paused" && agent.pauseReason === "budget") return "queued";
+  if (agent.status === "error") return "now";
+  if (agent.status === "pending_approval") return "next";
+  if (agent.status === "paused" && agent.pauseReason === "budget") return "next";
   if (agent.status === "paused") return "ambient";
   return null;
 }

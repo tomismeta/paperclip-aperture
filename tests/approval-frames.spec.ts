@@ -83,10 +83,10 @@ describe("approval-frames", () => {
     const snapshot = {
       ...createEmptySnapshot("company-1"),
       updatedAt: "2026-03-19T10:00:00.000Z",
-      active: createNonApprovalFrame(),
+      now: createNonApprovalFrame(),
       counts: {
-        active: 1,
-        queued: 0,
+        now: 1,
+        next: 0,
         ambient: 0,
         total: 1,
       },
@@ -99,7 +99,7 @@ describe("approval-frames", () => {
       createEmptyReviewState("company-1"),
     );
 
-    expect(merged.active?.taskId).toBe("approval:approval-2");
-    expect(merged.queued.map((frame) => frame.taskId)).toContain("issue:1");
+    expect(merged.now?.taskId).toBe("approval:approval-2");
+    expect(merged.next.map((frame) => frame.taskId)).toContain("issue:1");
   });
 });

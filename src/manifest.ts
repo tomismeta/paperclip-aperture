@@ -15,8 +15,10 @@ const manifest: PaperclipPluginManifestV1 = {
     "issue.comments.read",
     "issue.comments.create",
     "issue.documents.read",
+    "activity.log.write",
     "plugin.state.read",
     "plugin.state.write",
+    "telemetry.track",
     "ui.dashboardWidget.register",
     "ui.page.register",
     "ui.sidebar.register"

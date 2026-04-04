@@ -4,6 +4,7 @@ import {
   type AttentionFrame,
   type AttentionResponse,
 } from "@tomismeta/aperture-core";
+import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
 import {
   createAttentionSnapshot,
   createEmptyLedger,
@@ -20,7 +21,10 @@ type CompanySession = {
   snapshot: AttentionSnapshot | null;
   ledger: AttentionLedger;
   eventCount: number;
+  traces: ApertureTrace[];
 };
+
+const MAX_TRACE_HISTORY = 100;
 
 export class ApertureCompanyStore {
   private readonly sessions = new Map<string, CompanySession>();
@@ -49,6 +53,10 @@ export class ApertureCompanyStore {
 
   getLedger(companyId: string): AttentionLedger {
     return [...(this.sessions.get(companyId)?.ledger ?? [])];
+  }
+
+  getTraces(companyId: string): ApertureTrace[] {
+    return [...(this.sessions.get(companyId)?.traces ?? [])];
   }
 
   appendLedgerEntry(companyId: string, entry: AttentionLedgerEntry): AttentionLedger {
@@ -119,12 +127,8 @@ export class ApertureCompanyStore {
   }
 
   rebuildFromLedger(companyId: string, ledger: AttentionLedger): AttentionSnapshot {
-    const session: CompanySession = {
-      core: new ApertureCore(),
-      snapshot: null,
-      ledger: [...ledger],
-      eventCount: 0,
-    };
+    const session = this.createSession();
+    session.ledger = [...ledger];
 
     let lastSource: SnapshotSource | undefined;
     let lastOccurredAt: string | undefined;
@@ -152,13 +156,25 @@ export class ApertureCompanyStore {
     let session = this.sessions.get(companyId);
     if (session) return session;
 
-    session = {
-      core: new ApertureCore(),
+    session = this.createSession();
+    this.sessions.set(companyId, session);
+    return session;
+  }
+
+  private createSession(): CompanySession {
+    const core = new ApertureCore();
+    const session: CompanySession = {
+      core,
       snapshot: null,
       ledger: createEmptyLedger(),
       eventCount: 0,
+      traces: [],
     };
-    this.sessions.set(companyId, session);
+
+    core.onTrace((trace) => {
+      session.traces = [...session.traces.slice(-(MAX_TRACE_HISTORY - 1)), trace];
+    });
+
     return session;
   }
 }

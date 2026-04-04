@@ -1,6 +1,6 @@
 import type { AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "./types.js";
 
-export type FrameLane = "active" | "queued" | "ambient";
+export type FrameLane = "now" | "next" | "ambient";
 
 const AMBIENT_MAX_AGE_MS = 5 * 60 * 1000;
 
@@ -55,15 +55,15 @@ export function frameSortScore(frame: StoredAttentionFrame, lane: FrameLane): nu
   const toneWeight = frame.tone === "critical" ? 40 : frame.tone === "focused" ? 25 : 5;
   const consequenceWeight = frame.consequence === "high" ? 30 : frame.consequence === "medium" ? 15 : 0;
   const modeWeight = frame.mode === "approval" ? 12 : frame.mode === "choice" ? 8 : 0;
-  const laneWeight = lane === "active" ? 20 : lane === "queued" ? 10 : 0;
+  const laneWeight = lane === "now" ? 20 : lane === "next" ? 10 : 0;
   const budgetWeight = isBudgetOverride(frame) ? 10 : 0;
   return toneWeight + consequenceWeight + modeWeight + laneWeight + budgetWeight + frameSemanticWeight(frame);
 }
 
 function emptyLaneCounts(): LaneCounts {
   return {
-    active: 0,
-    queued: 0,
+    now: 0,
+    next: 0,
     ambient: 0,
     total: 0,
   };
@@ -110,10 +110,10 @@ export function calculateUnreadCounts(
 ): LaneCounts {
   const unread = emptyLaneCounts();
 
-  if (snapshot.active && isFrameUnread(snapshot.active, snapshot.updatedAt, review)) unread.active += 1;
-  unread.queued = snapshot.queued.filter((frame) => isFrameUnread(frame, snapshot.updatedAt, review)).length;
+  if (snapshot.now && isFrameUnread(snapshot.now, snapshot.updatedAt, review)) unread.now += 1;
+  unread.next = snapshot.next.filter((frame) => isFrameUnread(frame, snapshot.updatedAt, review)).length;
   unread.ambient = snapshot.ambient.filter((frame) => isFrameUnread(frame, snapshot.updatedAt, review)).length;
-  unread.total = unread.active + unread.queued + unread.ambient;
+  unread.total = unread.now + unread.next + unread.ambient;
 
   return unread;
 }
@@ -141,16 +141,16 @@ export function mergeStoredFrames(
   const base: AttentionSnapshot = snapshot ?? {
     companyId,
     updatedAt: new Date().toISOString(),
-    active: null,
-    queued: [],
+    now: null,
+    next: [],
     ambient: [],
     counts: emptyLaneCounts(),
   };
 
   const candidateTaskIds = new Set(candidates.map((candidate) => candidate.frame.taskId));
   const baseEntries: StoredFrameCandidate[] = [
-    ...(base.active ? [{ frame: base.active, lane: "active" as const }] : []),
-    ...base.queued.map((frame) => ({ frame, lane: "queued" as const })),
+    ...(base.now ? [{ frame: base.now, lane: "now" as const }] : []),
+    ...base.next.map((frame) => ({ frame, lane: "next" as const })),
     ...base.ambient.map((frame) => ({ frame, lane: "ambient" as const })),
   ].filter((candidate) => !candidateTaskIds.has(candidate.frame.taskId));
 
@@ -165,20 +165,20 @@ export function mergeStoredFrames(
     .filter((candidate) => !isAmbientExpired(candidate.frame, base.updatedAt, nowIso))
     .sort((left, right) => compareCandidates(left, right, base.updatedAt));
 
-  const active = actionable.shift()?.frame ?? null;
-  const queued = actionable.map((candidate) => candidate.frame);
+  const now = actionable.shift()?.frame ?? null;
+  const next = actionable.map((candidate) => candidate.frame);
   const ambientFrames = ambient.map((candidate) => candidate.frame);
 
   return attachReviewState({
     ...base,
-    active,
-    queued,
+    now,
+    next,
     ambient: ambientFrames,
     counts: {
-      active: active ? 1 : 0,
-      queued: queued.length,
+      now: now ? 1 : 0,
+      next: next.length,
       ambient: ambientFrames.length,
-      total: (active ? 1 : 0) + queued.length + ambientFrames.length,
+      total: (now ? 1 : 0) + next.length + ambientFrames.length,
     },
   }, review);
 }

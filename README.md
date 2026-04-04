@@ -20,6 +20,7 @@ It is designed as a live attention layer, not an inbox clone:
 - `now` shows the single most interrupting item
 - `next` stages the queue behind it
 - `ambient` keeps low-pressure awareness visible without demanding action
+- unread state is secondary to action pressure, so Focus stays judgment-first instead of becoming a second inbox
 
 Put differently:
 

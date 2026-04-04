@@ -63,10 +63,10 @@ function relationHintLabel(hint: SemanticRelationHint): string {
 
 function laneReason(lane: FrameLane): string {
   switch (lane) {
-    case "active":
+    case "now":
       return "This is the most urgent item in the queue right now.";
-    case "queued":
-      return "This is queued behind the current top item.";
+    case "next":
+      return "This is staged behind the current top item.";
     case "ambient":
       return "This is visible for awareness without needing action yet.";
   }

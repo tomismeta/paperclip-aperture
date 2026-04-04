@@ -76,6 +76,52 @@ export function emitAttentionUpdate(
   ctx.streams.emit(ATTENTION_UPDATES_STREAM, event);
 }
 
+export async function trackFocusTelemetry(
+  ctx: PluginContext,
+  eventName: string,
+  dimensions?: Record<string, string | number | boolean>,
+): Promise<void> {
+  try {
+    await ctx.telemetry.track(eventName, {
+      surface: "focus",
+      ...(dimensions ?? {}),
+    });
+  } catch (error) {
+    ctx.logger.warn("Failed to emit Focus telemetry", {
+      eventName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+export async function logFocusActivity(
+  ctx: PluginContext,
+  entry: {
+    companyId: string;
+    message: string;
+    entityType?: string;
+    entityId?: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  try {
+    await ctx.activity.log({
+      companyId: entry.companyId,
+      message: entry.message,
+      ...(entry.entityType ? { entityType: entry.entityType } : {}),
+      ...(entry.entityId ? { entityId: entry.entityId } : {}),
+      ...(entry.metadata ? { metadata: entry.metadata } : {}),
+    });
+  } catch (error) {
+    ctx.logger.warn("Failed to write Focus activity log entry", {
+      message: entry.message,
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 type PersistedAttentionMutation = {
   ledger: AttentionLedger;
   snapshot: AttentionSnapshot;

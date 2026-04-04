@@ -46,9 +46,9 @@ describe("explainability", () => {
           rationale: ["waiting on human", "issue review"],
         },
       },
-    }), "queued");
+    }), "next");
 
-    expect(explanation.laneReason).toContain("queued behind the current top item");
+    expect(explanation.laneReason).toContain("staged behind the current top item");
     expect(explanation.signalStrength).toBe("medium");
     expect(explanation.relationLabels).toContain("Part of the same thread");
     expect(explanation.relationLabels).toContain("Moves the request forward");
@@ -63,7 +63,7 @@ describe("explainability", () => {
           size: 3,
         },
       },
-    }), "active");
+    }), "now");
 
     expect(explanation.signalStrength).toBeNull();
     expect(explanation.signals).toContain("issue review");

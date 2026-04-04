@@ -5,10 +5,12 @@ import { createEmptyReviewState, createEmptySnapshot, type AttentionLedgerRespon
 import {
   ATTENTION_REVIEW_STATE_KEY,
   emitAttentionUpdate,
+  logFocusActivity,
   persistReviewState,
   requireCompanyId,
   requireStringParam,
   runAttentionMutation,
+  trackFocusTelemetry,
 } from "./shared.js";
 
 async function loadReviewState(ctx: PluginContext, companyId: string): Promise<AttentionReviewState> {
@@ -60,11 +62,62 @@ function buildSeenReviewState(
 function snapshotContainsTask(snapshot: AttentionSnapshot | null, taskId: string): boolean {
   if (!snapshot) return false;
   const frames: StoredAttentionFrame[] = [
-    ...(snapshot.active ? [snapshot.active] : []),
-    ...snapshot.queued,
+    ...(snapshot.now ? [snapshot.now] : []),
+    ...snapshot.next,
     ...snapshot.ambient,
   ];
   return frames.some((frame) => frame.taskId === taskId);
+}
+
+function entityTypeFromTaskId(taskId: string): string {
+  const separatorIndex = taskId.indexOf(":");
+  return separatorIndex > 0 ? taskId.slice(0, separatorIndex) : "unknown";
+}
+
+function defaultCounts(): AttentionSnapshot["counts"] {
+  return {
+    now: 0,
+    next: 0,
+    ambient: 0,
+    total: 0,
+  };
+}
+
+function laneForTask(snapshot: AttentionSnapshot | null, taskId: string): "now" | "next" | "ambient" | "ui_only" {
+  if (!snapshot) return "ui_only";
+  if (snapshot.now?.taskId === taskId) return "now";
+  if (snapshot.next.some((frame) => frame.taskId === taskId)) return "next";
+  if (snapshot.ambient.some((frame) => frame.taskId === taskId)) return "ambient";
+  return "ui_only";
+}
+
+function focusDimensions(
+  snapshot: AttentionSnapshot | null,
+  taskId: string,
+): Record<string, string | number | boolean> {
+  const lane = laneForTask(snapshot, taskId);
+  const entityType = entityTypeFromTaskId(taskId);
+  const frame = lane === "ui_only"
+    ? null
+    : lane === "now"
+      ? snapshot?.now ?? null
+      : lane === "next"
+        ? snapshot?.next.find((candidate) => candidate.taskId === taskId) ?? null
+        : snapshot?.ambient.find((candidate) => candidate.taskId === taskId) ?? null;
+
+  return {
+    entityType,
+    lane,
+    ...(frame?.mode ? { mode: frame.mode } : {}),
+    ...(frame?.source?.kind ? { sourceKind: frame.source.kind } : {}),
+    ...(typeof frame?.metadata?.liveReconciled === "boolean"
+      ? { liveReconciled: frame.metadata.liveReconciled as boolean }
+      : {}),
+  };
+}
+
+function approvalIdFromTaskId(taskId: string): string | null {
+  return taskId.startsWith("approval:") ? taskId.slice("approval:".length) : null;
 }
 
 export function registerActionHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
@@ -83,6 +136,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       },
       apertureResponse: response,
     };
+    const currentSnapshot = store.getSnapshot(companyId);
     const currentReview = await loadReviewState(ctx, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], true);
     const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
@@ -95,6 +149,9 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       eventType: "plugin.local.acknowledge",
       updatedAt: snapshot.updatedAt,
       counts: snapshot.counts,
+    });
+    await trackFocusTelemetry(ctx, "frame_acknowledged", {
+      ...focusDimensions(currentSnapshot, taskId),
     });
     return { ok: true, snapshot };
   });
@@ -114,6 +171,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     }
 
     const comment = await ctx.issues.createComment(issueId, body, companyId);
+    const currentSnapshot = store.getSnapshot(companyId);
     const currentReview = await loadReviewState(ctx, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], false);
     await persistReviewState(ctx, companyId, review);
@@ -122,11 +180,20 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       reason: "action",
       eventType: "plugin.local.comment",
       updatedAt: review.updatedAt,
-      counts: store.getSnapshot(companyId)?.counts ?? {
-        active: 0,
-        queued: 0,
-        ambient: 0,
-        total: 0,
+      counts: store.getSnapshot(companyId)?.counts ?? defaultCounts(),
+    });
+    await trackFocusTelemetry(ctx, "issue_comment_submitted", {
+      ...focusDimensions(currentSnapshot, taskId),
+      actionKind: "comment",
+    });
+    await logFocusActivity(ctx, {
+      companyId,
+      message: "Posted an issue comment from Focus.",
+      entityType: "issue",
+      entityId: issueId,
+      metadata: {
+        source: "focus",
+        taskId,
       },
     });
     return { ok: true, comment, review };
@@ -184,6 +251,26 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       updatedAt: snapshot.updatedAt,
       counts: snapshot.counts,
     });
+    await trackFocusTelemetry(ctx, "approval_response_recorded", {
+      ...focusDimensions(currentSnapshot, taskId),
+      decision: decision === "request-revision" ? "request_revision" : decision,
+    });
+    await logFocusActivity(ctx, {
+      companyId,
+      message:
+        decision === "approve"
+          ? "Approved a Focus approval."
+          : decision === "reject"
+            ? "Rejected a Focus approval."
+            : "Requested revision on a Focus approval.",
+      entityType: "approval",
+      entityId: approvalIdFromTaskId(taskId) ?? taskId,
+      metadata: {
+        source: "focus",
+        decision,
+        taskId,
+      },
+    });
     return { ok: true, snapshot, review };
   });
 
@@ -203,12 +290,10 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       reason: "action",
       eventType: "plugin.local.seen",
       updatedAt: review.updatedAt,
-      counts: store.getSnapshot(companyId)?.counts ?? {
-        active: 0,
-        queued: 0,
-        ambient: 0,
-        total: 0,
-      },
+      counts: store.getSnapshot(companyId)?.counts ?? defaultCounts(),
+    });
+    await trackFocusTelemetry(ctx, "attention_seen_marked", {
+      frameCount: taskIds.length,
     });
     return { ok: true, review };
   });

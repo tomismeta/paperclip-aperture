@@ -127,19 +127,28 @@ describe("paperclip aperture", () => {
     );
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-1" });
-    expect(snapshot.active?.mode).toBe("approval");
-    expect(snapshot.active?.title).toBe("Approve production deploy");
-    expect(snapshot.counts.active).toBe(1);
+    expect(snapshot.now?.mode).toBe("approval");
+    expect(snapshot.now?.title).toBe("Approve production deploy");
+    expect(snapshot.counts.now).toBe(1);
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-1",
-      taskId: snapshot.active?.taskId,
-      interactionId: snapshot.active?.interactionId,
+      taskId: snapshot.now?.taskId,
+      interactionId: snapshot.now?.interactionId,
     });
 
     const cleared = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-1" });
-    expect(cleared.active).toBeNull();
-    expect(cleared.counts.active).toBe(0);
+    expect(cleared.now).toBeNull();
+    expect(cleared.counts.now).toBe(0);
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "frame_acknowledged",
+        dimensions: expect.objectContaining({
+          surface: "focus",
+          entityType: "approval",
+        }),
+      }),
+    ]));
   });
 
   it("captures run failures as high-salience updates", async () => {
@@ -153,8 +162,8 @@ describe("paperclip aperture", () => {
     );
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-2" });
-    expect(snapshot.active?.consequence).toBe("high");
-    expect(snapshot.active?.title).toContain("Build failed");
+    expect(snapshot.now?.consequence).toBe("high");
+    expect(snapshot.now?.title).toContain("Build failed");
   });
 
   it("preserves budget override semantics for approval frames", async () => {
@@ -174,10 +183,10 @@ describe("paperclip aperture", () => {
     );
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-3" });
-    expect(snapshot.active?.title).toBe("Approve temporary budget override for CAM-9");
-    expect(snapshot.active?.consequence).toBe("high");
-    expect(snapshot.active?.provenance?.factors).toContain("budget stop");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "requested-amount")?.value).toBe("$500");
+    expect(snapshot.now?.title).toBe("Approve temporary budget override for CAM-9");
+    expect(snapshot.now?.consequence).toBe("high");
+    expect(snapshot.now?.provenance?.factors).toContain("budget stop");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "requested-amount")?.value).toBe("$500");
   });
 
   it("attaches richer core semantic payloads and issue relation hints to mapped events", async () => {
@@ -262,17 +271,29 @@ describe("paperclip aperture", () => {
     );
 
     const initial = await firstHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-approval-response" });
-    expect(initial.active?.taskId).toBe("approval:approval-response-1");
+    expect(initial.now?.taskId).toBe("approval:approval-response-1");
 
     await firstHarness.performAction("record-approval-response", {
       companyId: "company-approval-response",
-      taskId: initial.active?.taskId,
-      interactionId: initial.active?.interactionId,
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
       decision: "approve",
     });
 
     const cleared = await firstHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-approval-response" });
-    expect(cleared.active).toBeNull();
+    expect(cleared.now).toBeNull();
+    expect(firstHarness.activity).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: "Approved a Focus approval.",
+        entityType: "approval",
+        entityId: "approval-response-1",
+        metadata: expect.objectContaining({
+          source: "focus",
+          decision: "approve",
+          taskId: "approval:approval-response-1",
+        }),
+      }),
+    ]));
 
     const persistedLedger = firstHarness.getState({
       scopeKind: "company",
@@ -297,7 +318,7 @@ describe("paperclip aperture", () => {
     );
 
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-approval-response" });
-    expect(rebuilt.active).toBeNull();
+    expect(rebuilt.now).toBeNull();
     expect(rebuilt.counts.total).toBe(0);
   });
 
@@ -357,18 +378,18 @@ describe("paperclip aperture", () => {
     );
 
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-replay" });
-    expect(rebuilt.active?.title).toBe(original.active?.title);
-    expect(rebuilt.counts.active).toBe(1);
+    expect(rebuilt.now?.title).toBe(original.now?.title);
+    expect(rebuilt.counts.now).toBe(1);
 
     await secondHarness.performAction("acknowledge-frame", {
       companyId: "company-replay",
-      taskId: rebuilt.active?.taskId,
-      interactionId: rebuilt.active?.interactionId,
+      taskId: rebuilt.now?.taskId,
+      interactionId: rebuilt.now?.interactionId,
     });
 
     const cleared = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-replay" });
-    expect(cleared.active).toBeNull();
-    expect(cleared.counts.active).toBe(0);
+    expect(cleared.now).toBeNull();
+    expect(cleared.counts.now).toBe(0);
   });
 
   it("reconstructs acknowledged suppression from the ledger after restart even without persisted review state", async () => {
@@ -382,8 +403,8 @@ describe("paperclip aperture", () => {
     const initial = await firstHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-review-replay" });
     await firstHarness.performAction("acknowledge-frame", {
       companyId: "company-review-replay",
-      taskId: initial.active?.taskId,
-      interactionId: initial.active?.interactionId,
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
     });
 
     const persistedLedger = firstHarness.getState({
@@ -412,7 +433,7 @@ describe("paperclip aperture", () => {
     expect(review.frames["issue:issue-1"]?.suppressedAt).toBeTruthy();
 
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-review-replay" });
-    expect(rebuilt.active).toBeNull();
+    expect(rebuilt.now).toBeNull();
     expect(rebuilt.counts.total).toBe(0);
   });
 
@@ -436,8 +457,8 @@ describe("paperclip aperture", () => {
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-config" });
     expect(snapshot.counts.total).toBe(0);
-    expect(snapshot.active).toBeNull();
-    expect(snapshot.queued).toHaveLength(0);
+    expect(snapshot.now).toBeNull();
+    expect(snapshot.next).toHaveLength(0);
     expect(snapshot.ambient).toHaveLength(0);
   });
 
@@ -461,8 +482,8 @@ describe("paperclip aperture", () => {
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-run-config" });
     expect(snapshot.counts.total).toBe(0);
-    expect(snapshot.active).toBeNull();
-    expect(snapshot.queued).toHaveLength(0);
+    expect(snapshot.now).toBeNull();
+    expect(snapshot.next).toHaveLength(0);
     expect(snapshot.ambient).toHaveLength(0);
   });
 
@@ -475,10 +496,10 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.taskId).toBe("issue:issue-1");
-    expect(snapshot.active?.title).toContain("CAM-9");
-    expect(snapshot.active?.summary).toBe("Blocked issue waiting on clarification before work can continue.");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("Need clarification");
+    expect(snapshot.now?.taskId).toBe("issue:issue-1");
+    expect(snapshot.now?.title).toContain("CAM-9");
+    expect(snapshot.now?.summary).toBe("Blocked issue waiting on clarification before work can continue.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("Need clarification");
     expect(snapshot.review?.unread.total).toBeGreaterThan(0);
   });
 
@@ -496,8 +517,8 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.taskId).toBe("issue:issue-1");
-    expect(snapshot.active?.summary).toBe("Blocked issue waiting on clarification before work can continue.");
+    expect(snapshot.now?.taskId).toBe("issue:issue-1");
+    expect(snapshot.now?.summary).toBe("Blocked issue waiting on clarification before work can continue.");
   });
 
   it("does not reconcile seeded issues when issue lifecycle capture is disabled", async () => {
@@ -514,13 +535,13 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active).toBeNull();
-    expect(snapshot.queued).toHaveLength(0);
+    expect(snapshot.now).toBeNull();
+    expect(snapshot.next).toHaveLength(0);
     expect(snapshot.ambient).toHaveLength(0);
     expect(snapshot.counts.total).toBe(0);
   });
 
-  it("reconciles errored agents as active attention", async () => {
+  it("reconciles errored agents as now attention", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
     harness.seed({
@@ -528,9 +549,9 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.taskId).toBe("agent:agent-1");
-    expect(snapshot.active?.consequence).toBe("high");
-    expect(snapshot.active?.title).toContain("Atlas");
+    expect(snapshot.now?.taskId).toBe("agent:agent-1");
+    expect(snapshot.now?.consequence).toBe("high");
+    expect(snapshot.now?.title).toContain("Atlas");
   });
 
   it("suppresses reconciled frames after acknowledgement until the underlying item changes", async () => {
@@ -542,16 +563,16 @@ describe("paperclip aperture", () => {
     });
 
     const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(initial.active?.taskId).toBe("issue:issue-1");
+    expect(initial.now?.taskId).toBe("issue:issue-1");
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-live",
-      taskId: initial.active?.taskId,
-      interactionId: initial.active?.interactionId,
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
     });
 
     const suppressed = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(suppressed.active).toBeNull();
+    expect(suppressed.now).toBeNull();
     expect(suppressed.counts.total).toBe(0);
     const refreshedIssueUpdatedAt = new Date(Date.now() + 60_000);
     const refreshedCommentUpdatedAt = new Date(Date.now() + 120_000);
@@ -573,9 +594,9 @@ describe("paperclip aperture", () => {
     });
 
     const resurfaced = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(resurfaced.active?.taskId).toBe("issue:issue-1");
-    expect(resurfaced.active?.summary).toBe("Blocked issue waiting on clarification before work can continue.");
-    expect(resurfaced.active?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("New clarification request");
+    expect(resurfaced.now?.taskId).toBe("issue:issue-1");
+    expect(resurfaced.now?.summary).toBe("Blocked issue waiting on clarification before work can continue.");
+    expect(resurfaced.now?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("New clarification request");
     expect(resurfaced.review?.unread.total).toBeGreaterThan(0);
   });
 
@@ -589,12 +610,12 @@ describe("paperclip aperture", () => {
     });
 
     const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(initial.active?.taskId).toBe("issue:issue-1");
+    expect(initial.now?.taskId).toBe("issue:issue-1");
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-live",
-      taskId: initial.active?.taskId,
-      interactionId: initial.active?.interactionId,
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
     });
 
     harness.seed({
@@ -603,7 +624,7 @@ describe("paperclip aperture", () => {
     });
 
     const suppressed = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(suppressed.active).toBeNull();
+    expect(suppressed.now).toBeNull();
     expect(suppressed.counts.total).toBe(0);
   });
 
@@ -621,8 +642,8 @@ describe("paperclip aperture", () => {
       });
 
       const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-      expect(snapshot.active).toBeNull();
-      expect(snapshot.queued).toHaveLength(0);
+      expect(snapshot.now).toBeNull();
+      expect(snapshot.next).toHaveLength(0);
       expect(snapshot.ambient).toHaveLength(1);
       expect(snapshot.ambient[0]?.summary).toBe("Latest operator guidance appears to unblock this issue.");
       expect(snapshot.ambient[0]?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
@@ -654,13 +675,13 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.taskId).toBe("issue:issue-1");
-    expect(snapshot.active?.summary).toBe("Waiting on confirmation before APE-4 can proceed.");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
+    expect(snapshot.now?.taskId).toBe("issue:issue-1");
+    expect(snapshot.now?.summary).toBe("Waiting on confirmation before APE-4 can proceed.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
       "Confirm the direction so APE-4 can proceed.",
     );
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "blocks-target")?.value).toBe("APE-4");
-    expect(snapshot.active?.provenance?.whyNow).toBe("APE-4 is waiting on explicit confirmation before work can continue.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "blocks-target")?.value).toBe("APE-4");
+    expect(snapshot.now?.provenance?.whyNow).toBe("APE-4 is waiting on explicit confirmation before work can continue.");
   });
 
   it("derives a specific sharing recommendation when the board still needs the memo", async () => {
@@ -683,15 +704,15 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.summary).toBe("Board still needs the memo before review can continue.");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
+    expect(snapshot.now?.summary).toBe("Board still needs the memo before review can continue.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
       "Share the memo with the board so review can continue.",
     );
-    expect(snapshot.active?.provenance?.whyNow).toBe("The board still needs the memo before review can continue.");
-    expect(snapshot.active?.metadata?.attention).toEqual({
+    expect(snapshot.now?.provenance?.whyNow).toBe("The board still needs the memo before review can continue.");
+    expect(snapshot.now?.metadata?.attention).toEqual({
       rationale: ["waiting on human", "issue review"],
     });
-    expect(snapshot.active?.metadata?.semantic).toEqual({
+    expect(snapshot.now?.metadata?.semantic).toEqual({
       confidence: "high",
       relationHints: [
         { kind: "same_issue", target: "issue:issue-1" },
@@ -731,8 +752,8 @@ describe("paperclip aperture", () => {
       ]);
 
       const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-      expect(snapshot.active).toBeNull();
-      expect(snapshot.queued).toHaveLength(0);
+      expect(snapshot.now).toBeNull();
+      expect(snapshot.next).toHaveLength(0);
       expect(snapshot.ambient).toHaveLength(1);
       expect(snapshot.ambient[0]?.summary).toBe("The requested memo appears attached, so review should be able to continue.");
       expect(snapshot.ambient[0]?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
@@ -779,8 +800,8 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.summary).toBe("Board still needs the memo before review can continue.");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
+    expect(snapshot.now?.summary).toBe("Board still needs the memo before review can continue.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
       "Share the memo with the board so review can continue.",
     );
   });
@@ -794,19 +815,28 @@ describe("paperclip aperture", () => {
     });
 
     const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(initial.active?.taskId).toBe("issue:issue-1");
+    expect(initial.now?.taskId).toBe("issue:issue-1");
     expect(initial.review?.unread.total).toBeGreaterThan(0);
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-live",
-      taskId: initial.active?.taskId,
-      interactionId: initial.active?.interactionId,
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
     });
 
     const acknowledged = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(acknowledged.active).toBeNull();
+    expect(acknowledged.now).toBeNull();
     expect(acknowledged.counts.total).toBe(0);
     expect(acknowledged.review?.unread.total).toBe(0);
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "frame_acknowledged",
+        dimensions: expect.objectContaining({
+          surface: "focus",
+          entityType: "issue",
+        }),
+      }),
+    ]));
   });
 
   it("posts issue comments back to Paperclip from the frame action", async () => {
@@ -820,7 +850,7 @@ describe("paperclip aperture", () => {
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
     await harness.performAction("comment-on-issue", {
       companyId: "company-live",
-      taskId: snapshot.active?.taskId,
+      taskId: snapshot.now?.taskId,
       issueId: "issue-1",
       body: "Board can cover outreach directly this week while tooling is sorted out.",
     });
@@ -828,10 +858,30 @@ describe("paperclip aperture", () => {
     const comments = await harness.ctx.issues.listComments("issue-1", "company-live");
     expect(comments).toHaveLength(2);
     expect(comments.at(-1)?.body).toContain("Board can cover outreach directly");
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "issue_comment_submitted",
+        dimensions: expect.objectContaining({
+          surface: "focus",
+          entityType: "issue",
+        }),
+      }),
+    ]));
+    expect(harness.activity).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: "Posted an issue comment from Focus.",
+        entityType: "issue",
+        entityId: "issue-1",
+        metadata: expect.objectContaining({
+          source: "focus",
+          taskId: "issue:issue-1",
+        }),
+      }),
+    ]));
 
     const updated = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(updated.active?.taskId).toBe("issue:issue-1");
-    expect(updated.active?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("Board can cover outreach directly");
+    expect(updated.now?.taskId).toBe("issue:issue-1");
+    expect(updated.now?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("Board can cover outreach directly");
   });
 
   it("surfaces actor routing and a recommended move when the issue text is explicit", async () => {
@@ -852,9 +902,9 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.summary).toBe("Blocked on CEO action before work can continue.");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "needs-action-from")?.value).toBe("CEO");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "recommended-move")?.value).toContain("Board should either");
+    expect(snapshot.now?.summary).toBe("Blocked on CEO action before work can continue.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "needs-action-from")?.value).toBe("CEO");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "recommended-move")?.value).toContain("Board should either");
   });
 
   it("resolves known company agent names as agents in issue routing", async () => {
@@ -876,9 +926,9 @@ describe("paperclip aperture", () => {
     });
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(snapshot.active?.summary).toBe("Blocked on Founding Engineer action before work can continue.");
-    expect(snapshot.active?.context?.items?.find((item) => item.id === "needs-action-from")?.value).toBe("Founding Engineer");
-    expect(snapshot.active?.provenance?.whyNow).toBe("This issue is blocked on action from Founding Engineer.");
+    expect(snapshot.now?.summary).toBe("Blocked on Founding Engineer action before work can continue.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "needs-action-from")?.value).toBe("Founding Engineer");
+    expect(snapshot.now?.provenance?.whyNow).toBe("This issue is blocked on action from Founding Engineer.");
   });
 
   it("marks current attention as seen without suppressing it", async () => {
@@ -892,8 +942,8 @@ describe("paperclip aperture", () => {
 
     const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
     const taskIds = [
-      ...(initial.active ? [initial.active.taskId] : []),
-      ...initial.queued.map((frame) => frame.taskId),
+      ...(initial.now ? [initial.now.taskId] : []),
+      ...initial.next.map((frame) => frame.taskId),
       ...initial.ambient.map((frame) => frame.taskId),
     ];
 
@@ -905,7 +955,7 @@ describe("paperclip aperture", () => {
     });
 
     const seen = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
-    expect(seen.active?.taskId).toBe(initial.active?.taskId);
+    expect(seen.now?.taskId).toBe(initial.now?.taskId);
     expect(seen.counts.total).toBe(initial.counts.total);
     expect(seen.review?.unread.total).toBe(0);
     expect(seen.review?.lastSeenAt).toBeTruthy();
@@ -929,19 +979,66 @@ describe("paperclip aperture", () => {
     expect(beforeResponse.ledger).toHaveLength(1);
     expect(beforeResponse.eventEntries).toHaveLength(1);
     expect(beforeResponse.responseEntries).toHaveLength(0);
-    expect(beforeResponse.reconciledSnapshot.active?.title).toBe("Approve launch cutover");
+    expect(beforeResponse.traces.length).toBeGreaterThan(0);
+    expect(beforeResponse.reconciledSnapshot.now?.title).toBe("Approve launch cutover");
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-export",
-      taskId: beforeResponse.reconciledSnapshot.active?.taskId,
-      interactionId: beforeResponse.reconciledSnapshot.active?.interactionId,
+      taskId: beforeResponse.reconciledSnapshot.now?.taskId,
+      interactionId: beforeResponse.reconciledSnapshot.now?.interactionId,
     });
 
     const afterResponse = await harness.getData<AttentionExport>("attention-export", { companyId: "company-export" });
     expect(afterResponse.ledger).toHaveLength(2);
     expect(afterResponse.eventEntries).toHaveLength(1);
     expect(afterResponse.responseEntries).toHaveLength(1);
-    expect(afterResponse.snapshot.active).toBeNull();
+    expect(afterResponse.traces.length).toBeGreaterThanOrEqual(beforeResponse.traces.length);
+    expect(afterResponse.snapshot.now).toBeNull();
+  });
+
+  it("exposes recent core traces for debugging exports", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve launch cutover",
+        summary: "Launch cutover is waiting on a human decision.",
+      },
+      { companyId: "company-traces", entityId: "approval-trace-1", entityType: "approval" },
+    );
+
+    const traces = await harness.getData<unknown[]>("attention-traces", { companyId: "company-traces" });
+    expect(Array.isArray(traces)).toBe(true);
+    expect(traces.length).toBeGreaterThan(0);
+  });
+
+  it("reacts to issue document activity events for refresh invalidation", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "activity.logged",
+      {
+        action: "issue.document_created",
+        entityType: "issue",
+        entityId: "issue-1",
+      },
+      { companyId: "company-activity", entityId: "issue-1", entityType: "issue" },
+    );
+
+    expect(harness.logs).toContainEqual({
+      level: "info",
+      message: "Triggered Focus refresh from activity log event",
+      meta: {
+        companyId: "company-activity",
+        action: "issue.document_created",
+        entityId: "issue-1",
+        entityType: "issue",
+      },
+    });
   });
 
   it("exports a lab-compatible replay scenario from the attention ledger", async () => {
@@ -963,13 +1060,13 @@ describe("paperclip aperture", () => {
     });
     expect(beforeResponse.steps).toHaveLength(1);
     expect(beforeResponse.steps[0]?.kind).toBe("publish");
-    expect(beforeResponse.expectations?.finalActiveInteractionId).toBeTruthy();
+    expect(beforeResponse.expectations?.finalNowInteractionId).toBeTruthy();
 
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-replay-export" });
     await harness.performAction("acknowledge-frame", {
       companyId: "company-replay-export",
-      taskId: snapshot.active?.taskId,
-      interactionId: snapshot.active?.interactionId,
+      taskId: snapshot.now?.taskId,
+      interactionId: snapshot.now?.interactionId,
     });
 
     const afterResponse = await harness.getData<AttentionReplayScenario>("attention-replay-scenario", {
@@ -978,8 +1075,8 @@ describe("paperclip aperture", () => {
     expect(afterResponse.steps).toHaveLength(2);
     expect(afterResponse.steps[0]?.kind).toBe("publish");
     expect(afterResponse.steps[1]?.kind).toBe("submit");
-    expect(afterResponse.expectations?.finalActiveInteractionId).toBeNull();
-    expect(afterResponse.expectations?.resultBucketCounts?.active).toBe(0);
+    expect(afterResponse.expectations?.finalNowInteractionId).toBeNull();
+    expect(afterResponse.expectations?.resultLaneCounts?.now).toBe(0);
   });
 
 });

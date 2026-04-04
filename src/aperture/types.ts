@@ -1,4 +1,5 @@
 import type { ApertureEvent, AttentionFrame, AttentionResponse, AttentionView } from "@tomismeta/aperture-core";
+import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
 
 export type StoredAttentionFrame = Pick<
   AttentionFrame,
@@ -22,20 +23,20 @@ export type StoredAttentionFrame = Pick<
 export type AttentionSnapshot = {
   companyId: string;
   updatedAt: string;
-  active: StoredAttentionFrame | null;
-  queued: StoredAttentionFrame[];
+  now: StoredAttentionFrame | null;
+  next: StoredAttentionFrame[];
   ambient: StoredAttentionFrame[];
   counts: {
-    active: number;
-    queued: number;
+    now: number;
+    next: number;
     ambient: number;
     total: number;
   };
   review?: {
     lastSeenAt?: string;
     unread: {
-      active: number;
-      queued: number;
+      now: number;
+      next: number;
       ambient: number;
       total: number;
     };
@@ -74,6 +75,7 @@ export type AttentionExport = {
   ledger: AttentionLedger;
   eventEntries: AttentionLedgerEventEntry[];
   responseEntries: AttentionLedgerResponseEntry[];
+  traces: ApertureTrace[];
   snapshot: AttentionSnapshot;
   reconciledSnapshot: AttentionSnapshot;
   review: AttentionReviewState;
@@ -103,12 +105,12 @@ export type AttentionReplayScenario = {
   description?: string;
   doctrineTags?: string[];
   expectations?: {
-    finalActiveInteractionId?: string | null;
-    queuedInteractionIds?: string[];
+    finalNowInteractionId?: string | null;
+    nextInteractionIds?: string[];
     ambientInteractionIds?: string[];
-    resultBucketCounts?: {
-      active?: number;
-      queued?: number;
+    resultLaneCounts?: {
+      now?: number;
+      next?: number;
       ambient?: number;
     };
   };
@@ -151,12 +153,12 @@ export function createEmptySnapshot(companyId: string): AttentionSnapshot {
   return {
     companyId,
     updatedAt: new Date().toISOString(),
-    active: null,
-    queued: [],
+    now: null,
+    next: [],
     ambient: [],
     counts: {
-      active: 0,
-      queued: 0,
+      now: 0,
+      next: 0,
       ambient: 0,
       total: 0,
     },
@@ -181,22 +183,101 @@ export function createAttentionSnapshot(
   lastEvent?: AttentionSnapshot["lastEvent"],
   updatedAt?: string,
 ): AttentionSnapshot {
-  const active = toStoredFrame(view.active);
-  const queued = view.queued.map((frame) => toStoredFrame(frame)).filter((frame): frame is StoredAttentionFrame => frame !== null);
+  const legacyView = view as AttentionView & {
+    active?: AttentionFrame | null;
+    queued?: AttentionFrame[];
+  };
+  const now = toStoredFrame("now" in view ? view.now : legacyView.active ?? null);
+  const next = ("next" in view ? view.next : legacyView.queued ?? [])
+    .map((frame) => toStoredFrame(frame))
+    .filter((frame): frame is StoredAttentionFrame => frame !== null);
   const ambient = view.ambient.map((frame) => toStoredFrame(frame)).filter((frame): frame is StoredAttentionFrame => frame !== null);
 
   return {
     companyId,
     updatedAt: updatedAt ?? new Date().toISOString(),
-    active,
-    queued,
+    now,
+    next,
     ambient,
     counts: {
-      active: active ? 1 : 0,
-      queued: queued.length,
+      now: now ? 1 : 0,
+      next: next.length,
       ambient: ambient.length,
-      total: (active ? 1 : 0) + queued.length + ambient.length,
+      total: (now ? 1 : 0) + next.length + ambient.length,
     },
     ...(lastEvent ? { lastEvent } : {}),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asStoredFrame(value: unknown): StoredAttentionFrame | null {
+  const frame = asRecord(value);
+  if (!frame) return null;
+  return typeof frame.taskId === "string" && typeof frame.interactionId === "string"
+    ? frame as StoredAttentionFrame
+    : null;
+}
+
+function asStoredFrames(value: unknown): StoredAttentionFrame[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(asStoredFrame).filter((frame): frame is StoredAttentionFrame => frame !== null);
+}
+
+export function normalizeAttentionSnapshot(companyId: string, value: unknown): AttentionSnapshot | null {
+  const snapshot = asRecord(value);
+  if (!snapshot) return null;
+  if (snapshot.companyId !== companyId || typeof snapshot.updatedAt !== "string") return null;
+
+  const legacyCounts = asRecord(snapshot.counts);
+  const review = asRecord(snapshot.review);
+  const unread = asRecord(review?.unread);
+
+  const now = asStoredFrame(snapshot.now ?? snapshot.active ?? null);
+  const next = asStoredFrames(snapshot.next ?? snapshot.queued ?? []);
+  const ambient = asStoredFrames(snapshot.ambient);
+
+  return {
+    companyId,
+    updatedAt: snapshot.updatedAt,
+    now,
+    next,
+    ambient,
+    counts: {
+      now: typeof legacyCounts?.now === "number" ? legacyCounts.now : typeof legacyCounts?.active === "number" ? legacyCounts.active : now ? 1 : 0,
+      next: typeof legacyCounts?.next === "number" ? legacyCounts.next : typeof legacyCounts?.queued === "number" ? legacyCounts.queued : next.length,
+      ambient: typeof legacyCounts?.ambient === "number" ? legacyCounts.ambient : ambient.length,
+      total: typeof legacyCounts?.total === "number" ? legacyCounts.total : (now ? 1 : 0) + next.length + ambient.length,
+    },
+    ...(review
+      ? {
+          review: {
+            ...(typeof review.lastSeenAt === "string" ? { lastSeenAt: review.lastSeenAt } : {}),
+            unread: {
+              now: typeof unread?.now === "number" ? unread.now : typeof unread?.active === "number" ? unread.active : 0,
+              next: typeof unread?.next === "number" ? unread.next : typeof unread?.queued === "number" ? unread.queued : 0,
+              ambient: typeof unread?.ambient === "number" ? unread.ambient : 0,
+              total: typeof unread?.total === "number" ? unread.total : 0,
+            },
+          },
+        }
+      : {}),
+    ...(asRecord(snapshot.lastEvent)
+      ? {
+          lastEvent: {
+            eventType: String((snapshot.lastEvent as Record<string, unknown>).eventType),
+            ...(typeof (snapshot.lastEvent as Record<string, unknown>).entityId === "string"
+              ? { entityId: (snapshot.lastEvent as Record<string, unknown>).entityId as string }
+              : {}),
+            ...(typeof (snapshot.lastEvent as Record<string, unknown>).entityType === "string"
+              ? { entityType: (snapshot.lastEvent as Record<string, unknown>).entityType as string }
+              : {}),
+          },
+        }
+      : {}),
   };
 }

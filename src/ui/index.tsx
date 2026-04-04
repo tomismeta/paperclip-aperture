@@ -1,6 +1,7 @@
 import {
   usePluginAction,
   usePluginData,
+  usePluginStream,
   type PluginPageProps,
   type PluginSidebarProps,
   type PluginWidgetProps,
@@ -67,6 +68,7 @@ const ACCENT_COLOR = "#007ACC";
 const ACCENT_BG = `${ACCENT_COLOR}14`;
 const ACCENT_BORDER = `${ACCENT_COLOR}33`;
 const ACCENT_BG_STYLE: React.CSSProperties = { backgroundColor: ACCENT_COLOR };
+const ATTENTION_UPDATES_STREAM = "attention-updates";
 
 function currentSurfaceBrand(): SurfaceBrand {
   return {
@@ -223,17 +225,17 @@ function requestDescriptor(frame: StoredAttentionFrame): string {
 }
 
 function postureForSnapshot(snapshot: AttentionSnapshot): Posture {
-  const current = snapshot.active;
+  const current = snapshot.now;
 
   if (
     current?.tone === "critical"
     || current?.consequence === "high"
-    || snapshot.counts.active + snapshot.counts.queued >= 3
+    || snapshot.counts.now + snapshot.counts.next >= 3
   ) {
     return { glyph: "\u25CF", label: "busy" };
   }
 
-  if (snapshot.counts.active > 0 || snapshot.counts.queued > 0 || snapshot.counts.ambient > 0) {
+  if (snapshot.counts.now > 0 || snapshot.counts.next > 0 || snapshot.counts.ambient > 0) {
     return { glyph: "\u25D0", label: "elevated" };
   }
 
@@ -241,7 +243,12 @@ function postureForSnapshot(snapshot: AttentionSnapshot): Posture {
 }
 
 function actionableCount(snapshot: AttentionSnapshot): number {
-  return (snapshot.active ? 1 : 0) + snapshot.queued.length;
+  return (snapshot.now ? 1 : 0) + snapshot.next.length;
+}
+
+function actionableLabel(snapshot: AttentionSnapshot): string | null {
+  const actionable = actionableCount(snapshot);
+  return actionable > 0 ? `${actionable} action${actionable === 1 ? "" : "s"}` : null;
 }
 
 function judgmentLine(frame: StoredAttentionFrame, lane: FrameLane): string {
@@ -256,21 +263,21 @@ function nextPrimaryText(frame: StoredAttentionFrame): string | null {
   const summary = frame.summary?.trim();
   if (summary) return summary;
 
-  const fallback = judgmentLine(frame, "queued");
+  const fallback = judgmentLine(frame, "next");
   return fallback === GENERIC_QUEUED_JUDGMENT ? null : fallback;
 }
 
 function supportingLine(frame: StoredAttentionFrame, lane: FrameLane): string | null {
   const owner = actionOwnerValue(frame);
   const target = blockingTargetValue(frame);
-  if (target && lane === "active" && entityTypeFromFrame(frame) === "issue" && driverLabel(frame) === "review required") {
+  if (target && lane === "now" && entityTypeFromFrame(frame) === "issue" && driverLabel(frame) === "review required") {
     return issueBlocksTargetLine(target);
   }
-  if (owner && lane === "active" && entityTypeFromFrame(frame) === "issue") {
+  if (owner && lane === "now" && entityTypeFromFrame(frame) === "issue") {
     return issueNeedsActionFromLine(owner);
   }
 
-  if (lane === "active") {
+  if (lane === "now") {
     const recommendedMove = recommendedMoveValue(frame)?.trim();
     const summary = frame.summary?.trim();
     const judgment = judgmentLine(frame, lane).trim();
@@ -369,22 +376,22 @@ function applyLocalSuppressions(
     return frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(suppressedAt) > 0;
   };
 
-  const queued = snapshot.queued.filter(keepFrame);
+  const next = snapshot.next.filter(keepFrame);
   const ambient = snapshot.ambient.filter(keepFrame);
-  const activeCandidate = snapshot.active && keepFrame(snapshot.active) ? snapshot.active : null;
-  const active = activeCandidate ?? queued[0] ?? null;
-  const nextQueued = activeCandidate ? queued : queued.slice(1);
+  const nowCandidate = snapshot.now && keepFrame(snapshot.now) ? snapshot.now : null;
+  const now = nowCandidate ?? next[0] ?? null;
+  const nextFrames = nowCandidate ? next : next.slice(1);
 
   return {
     ...snapshot,
-    active,
-    queued: nextQueued,
+    now,
+    next: nextFrames,
     ambient,
     counts: {
-      active: active ? 1 : 0,
-      queued: nextQueued.length,
+      now: now ? 1 : 0,
+      next: nextFrames.length,
       ambient: ambient.length,
-      total: (active ? 1 : 0) + nextQueued.length + ambient.length,
+      total: (now ? 1 : 0) + nextFrames.length + ambient.length,
     },
   };
 }
@@ -748,8 +755,18 @@ function useQueueMovement(frames: StoredAttentionFrame[], ttlMs = 3500): Record<
 function useAttentionModel(companyId: string | null | undefined) {
   const displayQuery = usePluginData<AttentionDisplayPayload>("attention-display", companyId ? { companyId } : undefined);
   const approvalsQuery = usePendingApprovals(companyId);
+  const updates = usePluginStream<{ updatedAt: string; eventType: string }>(
+    ATTENTION_UPDATES_STREAM,
+    companyId ? { companyId } : undefined,
+  );
 
   useAttentionPolling(companyId, [displayQuery.refresh, approvalsQuery.refresh]);
+
+  useEffect(() => {
+    if (!companyId || !updates.lastEvent) return;
+    displayQuery.refresh();
+    approvalsQuery.refresh();
+  }, [companyId, updates.lastEvent?.updatedAt, updates.lastEvent?.eventType]);
 
   const snapshot = useMemo(
     () => (
@@ -959,12 +976,12 @@ function InlineExplainability(props: {
     ...explanation.signals.slice(0, 2),
     ...explanation.relationLabels.slice(0, 1),
   ];
-  const label = props.lane === "queued" ? "Why next" : props.lane === "ambient" ? "Why ambient" : "Why now";
+  const label = props.lane === "next" ? "Why next" : props.lane === "ambient" ? "Why ambient" : "Why now";
   const whyNow = explanation.whyNow ?? judgmentLine(props.frame, props.lane);
-  const primaryLine = props.lane === "active"
+  const primaryLine = props.lane === "now"
     ? (props.preferLaneReason ? explanation.laneReason : whyNow)
     : whyNow;
-  const secondaryLine = props.lane === "active"
+  const secondaryLine = props.lane === "now"
     ? (!props.preferLaneReason && whyNow !== explanation.laneReason ? explanation.laneReason : null)
     : explanation.laneReason;
 
@@ -995,7 +1012,7 @@ function ExplainabilityPanel(props: {
   const strength = !props.detailOnly && explanation.signalStrength ? signalStrengthLabel(explanation.signalStrength) : null;
   const signalValues = props.detailOnly ? explanation.signals.slice(2) : explanation.signals;
   const relationValues = props.detailOnly ? explanation.relationLabels.slice(1) : explanation.relationLabels;
-  const reasoningLabel = props.lane === "active" ? "Reasoning" : props.lane === "queued" ? "Why it sits here" : "Why it stays quiet";
+  const reasoningLabel = props.lane === "now" ? "Reasoning" : props.lane === "next" ? "Why it sits here" : "Why it stays quiet";
 
   if (props.detailOnly && signalValues.length === 0 && relationValues.length === 0 && !explanation.continuity) {
     return null;
@@ -1186,7 +1203,7 @@ function NowDetails(props: {
 
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      <ExplainabilityPanel frame={frame} lane="active" detailOnly />
+      <ExplainabilityPanel frame={frame} lane="now" detailOnly />
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span>{requestDescriptor(frame)}</span>
@@ -1421,14 +1438,14 @@ function NowPane(props: {
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
-  const frame = props.snapshot.active;
+  const frame = props.snapshot.now;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const wideLayout = useWideLayout(1120);
   const activeFrameId = frame?.id ?? null;
-  const activeUnread = !!frame && (props.snapshot.review?.unread.active ?? 0) > 0;
+  const activeUnread = !!frame && (props.snapshot.review?.unread.now ?? 0) > 0;
   const itemLink = frame ? itemHref(frame, props.companyPrefix) : null;
   const recommendedMove = frame ? recommendedMoveValue(frame) : null;
-  const helperLine = frame ? supportingLine(frame, "active") : null;
+  const helperLine = frame ? supportingLine(frame, "now") : null;
   const driverBadge = driverBadgeStyle();
 
   // Reset disclosure only when the *active frame* actually changes identity
@@ -1450,11 +1467,11 @@ function NowPane(props: {
           </div>
         </div>
         <div className="flex items-center gap-3 text-xs tabular-nums text-muted-foreground">
-          <span className={props.counts.active > 0 ? "font-semibold" : ""}>
-            now {props.counts.active > 0 ? <Accent>{props.counts.active}</Accent> : props.counts.active}
+          <span className={props.counts.now > 0 ? "font-semibold" : ""}>
+            now {props.counts.now > 0 ? <Accent>{props.counts.now}</Accent> : props.counts.now}
           </span>
-          <span className={props.counts.queued > 0 ? "font-semibold" : ""}>
-            next {props.counts.queued > 0 ? <Accent>{props.counts.queued}</Accent> : props.counts.queued}
+          <span className={props.counts.next > 0 ? "font-semibold" : ""}>
+            next {props.counts.next > 0 ? <Accent>{props.counts.next}</Accent> : props.counts.next}
           </span>
           <span className={props.counts.ambient > 0 ? "font-semibold" : ""}>
             ambient {props.counts.ambient > 0 ? <Accent>{props.counts.ambient}</Accent> : props.counts.ambient}
@@ -1503,7 +1520,7 @@ function NowPane(props: {
                   ) : null}
                 </div>
 
-                <InlineExplainability frame={frame} lane="active" preferLaneReason={!!helperLine} />
+                <InlineExplainability frame={frame} lane="now" preferLaneReason={!!helperLine} />
 
                 <div className="flex items-center gap-4">
                   <Accent><button
@@ -1528,7 +1545,7 @@ function NowPane(props: {
 
               <NowActionRail
                 frame={frame}
-                lane="active"
+                lane="now"
                 wide={wideLayout}
                 pendingId={props.pendingId}
                 itemLink={itemLink}
@@ -1581,7 +1598,7 @@ function NextRow(props: {
   const secondaryText = nextPrimaryText(frame);
   const driver = driverLabel(frame);
   const driverBadge = driverBadgeStyle();
-  const detailText = judgmentLine(frame, "queued");
+  const detailText = judgmentLine(frame, "next");
   const showDetailText = detailText.trim().length > 0 && detailText !== secondaryText && detailText !== GENERIC_QUEUED_JUDGMENT;
   const rankOpacity = Math.max(0.4, 1 - (props.rank - 1) * 0.14);
 
@@ -1629,7 +1646,7 @@ function NextRow(props: {
               {detailText}
             </p>
           ) : null}
-          <ExplainabilityStrip frame={frame} lane="queued" />
+          <ExplainabilityStrip frame={frame} lane="next" />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>{impactLabel(frame)}</span>
             {driver ? <Accent>{driver}</Accent> : null}
@@ -1656,7 +1673,7 @@ function NextRow(props: {
             <IssueCommentComposer frame={frame} pendingId={props.pendingId} onComment={props.onComment} />
             <FrameActions
               frame={frame}
-              lane="queued"
+              lane="next"
               pendingId={props.pendingId}
               onApprove={props.onApprove}
               onReject={props.onReject}
@@ -1806,7 +1823,8 @@ export function DashboardWidget(props: PluginWidgetProps) {
   if (!data) return <MessageCard title={brand.wordmark} body={brand.headingEmptyState} />;
 
   const posture = postureForSnapshot(data);
-  const leadingText = data.active ? (recommendedMoveValue(data.active) ?? data.active.title) : null;
+  const leadingText = data.now ? (recommendedMoveValue(data.now) ?? data.now.title) : null;
+  const actionable = actionableLabel(data);
   const borderStyle =
     posture.label === "busy"
       ? { borderLeftWidth: 2, borderLeftColor: ACCENT_COLOR }
@@ -1822,11 +1840,11 @@ export function DashboardWidget(props: PluginWidgetProps) {
           <div className="flex items-end gap-2">
             <Accent className="font-semibold tracking-[0.04em]">{brand.wordmark}</Accent>
             <Accent className="text-[11px]">{posture.label}</Accent>
-            {unreadCount(data) > 0 ? <Accent className="text-[11px]">new {unreadCount(data)}</Accent> : null}
+            {actionable ? <Accent className="text-[11px]">{actionable}</Accent> : null}
           </div>
         </div>
         <span className="ml-auto tabular-nums text-muted-foreground">
-          now {data.counts.active} · next {data.counts.queued} · ambient {data.counts.ambient}
+          now {data.counts.now} · next {data.counts.next} · ambient {data.counts.ambient}
         </span>
       </div>
       {leadingText ? (
@@ -1891,21 +1909,25 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
           <path d="M14.3 16H3.9" />
           <path d="m16.6 12-5.2 9" />
         </svg>
+        {unread > 0 ? (
+          <span
+            className="absolute -right-1 -top-1 h-2 w-2 rounded-full"
+            style={{ backgroundColor: ACCENT_COLOR }}
+          />
+        ) : null}
       </span>
       <span className="flex-1 truncate">{brand.wordmark}</span>
-      {(unread > 0 || actionable > 0) ? (
-        unread > 0 ? (
-          <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
-            {unread}
-          </span>
-        ) : (
+      {actionable > 0 ? (
+        <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
+          {actionable}
+        </span>
+      ) : unread > 0 ? (
           <span
             className="inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-xs leading-none font-medium"
             style={{ color: ACCENT_COLOR, borderColor: ACCENT_BORDER, backgroundColor: "transparent" }}
           >
-            {actionable}
+            {unread}
           </span>
-        )
       ) : null}
     </a>
   );
@@ -1956,7 +1978,7 @@ export function AttentionPage(props: PluginPageProps) {
   const backgroundErrorMessage = displaySnapshot && error ? `Sync issue: ${error.message}` : null;
   const posture = useMemo(() => (displaySnapshot ? postureForSnapshot(displaySnapshot) : null), [displaySnapshot]);
   const nextRows = useMemo(
-    () => (displaySnapshot ? displaySnapshot.queued.map((frame) => ({ frame, lane: "queued" as const })) : []),
+    () => (displaySnapshot ? displaySnapshot.next.map((frame) => ({ frame, lane: "next" as const })) : []),
     [displaySnapshot],
   );
   const ambientRows = useMemo(
@@ -1971,8 +1993,8 @@ export function AttentionPage(props: PluginPageProps) {
     setLocalSuppressions((current) => {
       const nextEntries = Object.entries(current).filter(([taskId, suppressedAt]) => {
         const frames = [
-          ...(snapshot.active ? [snapshot.active] : []),
-          ...snapshot.queued,
+          ...(snapshot.now ? [snapshot.now] : []),
+          ...snapshot.next,
           ...snapshot.ambient,
         ];
         const matching = frames.filter((frame) => frame.taskId === taskId);

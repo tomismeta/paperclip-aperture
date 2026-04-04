@@ -6,6 +6,7 @@ import {
   createEmptyLedger,
   createEmptyReviewState,
   createEmptySnapshot,
+  normalizeAttentionSnapshot,
   type AttentionLedger,
   type AttentionLedgerEntry,
   type AttentionLedgerEventEntry,
@@ -26,20 +27,7 @@ import {
 } from "./shared.js";
 
 function isAttentionSnapshot(value: unknown, companyId: string): value is AttentionSnapshot {
-  if (!value || typeof value !== "object") return false;
-
-  const snapshot = value as Partial<AttentionSnapshot>;
-  return (
-    snapshot.companyId === companyId
-    && typeof snapshot.updatedAt === "string"
-    && !!snapshot.counts
-    && typeof snapshot.counts.active === "number"
-    && typeof snapshot.counts.queued === "number"
-    && typeof snapshot.counts.ambient === "number"
-    && typeof snapshot.counts.total === "number"
-    && Array.isArray(snapshot.queued)
-    && Array.isArray(snapshot.ambient)
-  );
+  return normalizeAttentionSnapshot(companyId, value) !== null;
 }
 
 function isLedgerSource(value: unknown): value is NonNullable<AttentionLedgerEntry["source"]> {
@@ -138,7 +126,7 @@ async function loadAttentionState(
   companyId: string,
 ): Promise<{
   persistedLedger: unknown;
-  persistedSnapshot: unknown;
+  persistedSnapshot: AttentionSnapshot | null;
   persistedReview: unknown;
   baseLedger: AttentionLedger;
   snapshot: AttentionSnapshot;
@@ -165,6 +153,7 @@ async function loadAttentionState(
     : isAttentionLedger(persistedLedger)
       ? persistedLedger
       : createEmptyLedger();
+  const normalizedPersistedSnapshot = normalizeAttentionSnapshot(companyId, persistedSnapshot);
 
   const snapshot = store.rebuildFromLedger(companyId, baseLedger);
   const reviewState = deriveReviewStateFromLedger(
@@ -175,7 +164,7 @@ async function loadAttentionState(
 
   return {
     persistedLedger,
-    persistedSnapshot,
+    persistedSnapshot: normalizedPersistedSnapshot,
     persistedReview,
     baseLedger,
     snapshot,
@@ -215,14 +204,14 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
     const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, companyId, snapshot, reviewState);
 
     const shouldPersistLedger = !isAttentionLedger(persistedLedger) || !sameJson(persistedLedger, baseLedger);
-    const shouldPersistSnapshot = !isAttentionSnapshot(persistedSnapshot, companyId) || !sameJson(persistedSnapshot, snapshot);
+    const shouldPersistSnapshot = !persistedSnapshot || !sameJson(persistedSnapshot, snapshot);
     const shouldPersistReview = !isAttentionReviewState(persistedReview, companyId) || !sameJson(persistedReview, reviewState);
 
     if (shouldPersistLedger) await persistLedger(ctx, companyId, baseLedger);
     if (shouldPersistSnapshot) await persistSnapshot(ctx, companyId, snapshot);
     if (shouldPersistReview) await persistReviewState(ctx, companyId, reviewState);
 
-    if (!isAttentionLedger(persistedLedger) && isAttentionSnapshot(persistedSnapshot, companyId)) {
+    if (!isAttentionLedger(persistedLedger) && persistedSnapshot) {
       ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", {
         companyId,
       });
@@ -244,14 +233,14 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
     const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, companyId, snapshot, reviewState);
 
     const shouldPersistLedger = !isAttentionLedger(persistedLedger) || !sameJson(persistedLedger, baseLedger);
-    const shouldPersistSnapshot = !isAttentionSnapshot(persistedSnapshot, companyId) || !sameJson(persistedSnapshot, snapshot);
+    const shouldPersistSnapshot = !persistedSnapshot || !sameJson(persistedSnapshot, snapshot);
     const shouldPersistReview = !isAttentionReviewState(persistedReview, companyId) || !sameJson(persistedReview, reviewState);
 
     if (shouldPersistLedger) await persistLedger(ctx, companyId, baseLedger);
     if (shouldPersistSnapshot) await persistSnapshot(ctx, companyId, snapshot);
     if (shouldPersistReview) await persistReviewState(ctx, companyId, reviewState);
 
-    if (!isAttentionLedger(persistedLedger) && isAttentionSnapshot(persistedSnapshot, companyId)) {
+    if (!isAttentionLedger(persistedLedger) && persistedSnapshot) {
       ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", {
         companyId,
       });
@@ -279,10 +268,17 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       ledger: baseLedger,
       eventEntries: baseLedger.filter((entry): entry is AttentionLedgerEventEntry => entry.kind === "event"),
       responseEntries: baseLedger.filter((entry): entry is AttentionLedgerResponseEntry => entry.kind === "response"),
+      traces: store.getTraces(companyId),
       snapshot,
       reconciledSnapshot,
       review: reviewState,
     } satisfies AttentionExport;
+  });
+
+  ctx.data.register("attention-traces", async (params) => {
+    const companyId = requireCompanyId(params);
+    await loadAttentionState(ctx, store, companyId);
+    return store.getTraces(companyId);
   });
 
   ctx.data.register("attention-replay-scenario", async (params) => {
@@ -295,12 +291,12 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       description: "Replay scenario exported from the Paperclip Aperture plugin ledger.",
       doctrineTags: ["paperclip", "aperture", "replay-export"],
       expectations: {
-        finalActiveInteractionId: snapshot.active?.interactionId ?? null,
-        queuedInteractionIds: snapshot.queued.map((frame) => frame.interactionId),
+        finalNowInteractionId: snapshot.now?.interactionId ?? null,
+        nextInteractionIds: snapshot.next.map((frame) => frame.interactionId),
         ambientInteractionIds: snapshot.ambient.map((frame) => frame.interactionId),
-        resultBucketCounts: {
-          active: snapshot.counts.active,
-          queued: snapshot.counts.queued,
+        resultLaneCounts: {
+          now: snapshot.counts.now,
+          next: snapshot.counts.next,
           ambient: snapshot.counts.ambient,
         },
       },

@@ -4,6 +4,7 @@ import type { FrameLane } from "./frame-model.js";
 import { isBudgetOverride } from "./frame-model.js";
 
 export const GENERIC_QUEUED_JUDGMENT = "Important enough to keep visible, but not enough to displace now.";
+export const GENERIC_NEXT_JUDGMENT = GENERIC_QUEUED_JUDGMENT;
 
 export function approvalBlockingSummary(budgetOverride: boolean): string {
   return budgetOverride
@@ -79,7 +80,7 @@ export function pendingApprovalEventWhyNow(): string {
 }
 
 export function genericJudgmentLine(frame: StoredAttentionFrame, lane: FrameLane): string {
-  if (lane === "active") {
+  if (lane === "now") {
     if (isBudgetOverride(frame)) return approvalBlockingSummary(true);
     if (frame.mode === "approval") return "A human decision is blocking work right now.";
     if (frame.tone === "critical") return "This surfaced because it can displace the operator now.";
@@ -87,6 +88,6 @@ export function genericJudgmentLine(frame: StoredAttentionFrame, lane: FrameLane
   }
 
   if (isBudgetOverride(frame)) return "Budget review is staged behind the current focus.";
-  if (lane === "queued") return GENERIC_QUEUED_JUDGMENT;
+  if (lane === "next") return GENERIC_NEXT_JUDGMENT;
   return "Useful for awareness, but not interrupting.";
 }

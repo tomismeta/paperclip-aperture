@@ -5,6 +5,7 @@ import type { AttentionLedgerEventEntry } from "../aperture/types.js";
 import { emitAttentionUpdate, runAttentionMutation } from "./shared.js";
 
 const SUBSCRIBED_EVENTS: readonly string[] = [
+  "activity.logged",
   "approval.created",
   "approval.decided",
   "approval.approved",
@@ -20,6 +21,12 @@ const SUBSCRIBED_EVENTS: readonly string[] = [
   "agent.run.cancelled",
   "agent.status_changed",
 ] as const;
+
+const ATTENTION_ACTIVITY_ACTIONS = new Set([
+  "issue.document_created",
+  "issue.document_updated",
+  "issue.document_deleted",
+]);
 
 function shouldCaptureEvent(
   config: Record<string, unknown>,
@@ -84,6 +91,36 @@ async function handleEvent(
 ): Promise<void> {
   const config = await ctx.config.get();
   if (!shouldCaptureEvent(config, event.eventType)) return;
+
+  if (event.eventType === "activity.logged") {
+    const payload = event.payload && typeof event.payload === "object"
+      ? event.payload as Record<string, unknown>
+      : {};
+    const action = typeof payload.action === "string" ? payload.action : undefined;
+    const entityType = typeof payload.entityType === "string" ? payload.entityType : event.entityType;
+
+    if (entityType === "issue" && action && ATTENTION_ACTIVITY_ACTIONS.has(action)) {
+      emitAttentionUpdate(ctx, {
+        companyId: event.companyId,
+        reason: "event",
+        eventType: `activity.${action}`,
+        updatedAt: event.occurredAt,
+        counts: store.getSnapshot(event.companyId)?.counts ?? {
+          now: 0,
+          next: 0,
+          ambient: 0,
+          total: 0,
+        },
+      });
+      ctx.logger.info("Triggered Focus refresh from activity log event", {
+        companyId: event.companyId,
+        action,
+        entityId: event.entityId,
+        entityType,
+      });
+    }
+    return;
+  }
 
   const enriched = await enrichIssuePayload(ctx, event);
   const mapped = mapPluginEventToAperture(enriched);

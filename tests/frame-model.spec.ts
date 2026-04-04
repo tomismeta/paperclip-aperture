@@ -46,12 +46,12 @@ describe("frame-model", () => {
     const snapshot = {
       ...createEmptySnapshot("company-1"),
       updatedAt: "2026-03-19T10:00:00.000Z",
-      active: createFrame("issue:1", "2026-03-19T10:00:00.000Z"),
-      queued: [createFrame("issue:2", "2026-03-19T09:59:00.000Z")],
+      now: createFrame("issue:1", "2026-03-19T10:00:00.000Z"),
+      next: [createFrame("issue:2", "2026-03-19T09:59:00.000Z")],
       ambient: [createFrame("issue:3", "2026-03-19T09:58:00.000Z")],
       counts: {
-        active: 1,
-        queued: 1,
+        now: 1,
+        next: 1,
         ambient: 1,
         total: 3,
       },
@@ -67,8 +67,8 @@ describe("frame-model", () => {
     };
 
     expect(calculateUnreadCounts(snapshot, review)).toEqual({
-      active: 1,
-      queued: 0,
+      now: 1,
+      next: 0,
       ambient: 0,
       total: 1,
     });
@@ -94,7 +94,7 @@ describe("frame-model", () => {
     const snapshot = {
       ...createEmptySnapshot("company-1"),
       updatedAt: "2026-03-19T10:00:00.000Z",
-      active: createFrame("issue:1", "2026-03-19T09:55:00.000Z", {
+      now: createFrame("issue:1", "2026-03-19T09:55:00.000Z", {
         tone: "ambient",
         consequence: "low",
         provenance: {
@@ -102,8 +102,8 @@ describe("frame-model", () => {
         },
       }),
       counts: {
-        active: 1,
-        queued: 0,
+        now: 1,
+        next: 0,
         ambient: 0,
         total: 1,
       },
@@ -116,10 +116,10 @@ describe("frame-model", () => {
       },
     });
 
-    const merged = mergeStoredFrames(snapshot, "company-1", [candidate(failedRun, "queued")]);
+    const merged = mergeStoredFrames(snapshot, "company-1", [candidate(failedRun, "next")]);
 
-    expect(merged.active?.taskId).toBe("run:1");
-    expect(frameSortScore(failedRun, "queued")).toBeGreaterThan(frameSortScore(snapshot.active!, "active"));
+    expect(merged.now?.taskId).toBe("run:1");
+    expect(frameSortScore(failedRun, "next")).toBeGreaterThan(frameSortScore(snapshot.now!, "now"));
   });
 
   it("replaces base frames with reconciled candidates that share a task id", () => {
@@ -132,19 +132,19 @@ describe("frame-model", () => {
     const snapshot = {
       ...createEmptySnapshot("company-1"),
       updatedAt: "2026-03-19T10:05:00.000Z",
-      active: staleBase,
+      now: staleBase,
       counts: {
-        active: 1,
-        queued: 0,
+        now: 1,
+        next: 0,
         ambient: 0,
         total: 1,
       },
     };
 
-    const merged = mergeStoredFrames(snapshot, "company-1", [candidate(freshCandidate, "active")]);
+    const merged = mergeStoredFrames(snapshot, "company-1", [candidate(freshCandidate, "now")]);
 
-    expect(merged.active?.title).toBe("Fresh blocked issue title");
-    expect(merged.active?.timing.updatedAt).toBe("2026-03-19T10:05:00.000Z");
+    expect(merged.now?.title).toBe("Fresh blocked issue title");
+    expect(merged.now?.timing.updatedAt).toBe("2026-03-19T10:05:00.000Z");
   });
 
   it("expires ambient frames after five minutes", () => {
@@ -161,8 +161,8 @@ describe("frame-model", () => {
       updatedAt: "2026-03-19T10:00:00.000Z",
       ambient: [recentAmbient, staleAmbient],
       counts: {
-        active: 0,
-        queued: 0,
+        now: 0,
+        next: 0,
         ambient: 2,
         total: 2,
       },
