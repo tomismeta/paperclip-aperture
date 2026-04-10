@@ -176,6 +176,20 @@ This pass produced five concrete gains:
    The system is easier to explain:
    worker owns state and host adaptation, Core owns judgment, UI owns presentation.
 
+## Immediate User-Facing Follow-Up
+
+On top of the remediation pass, Focus now uses Aperture Core's operator engagement support to hold the current `now` item steady briefly while the operator is actively interacting with it.
+
+Current triggers:
+
+- opening `Show context`
+- opening the inline comment composer on the active item
+
+Why it matters:
+
+- the current focus item feels calmer while someone is actively working it
+- the new live Core session architecture now pays off in a directly visible way
+
 ## Verification
 
 The remediation pass was validated with:

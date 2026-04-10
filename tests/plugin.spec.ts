@@ -191,6 +191,43 @@ describe("paperclip aperture", () => {
     ]));
   });
 
+  it("records operator engagement for the active now item", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-focus-hold", entityId: "approval-1", entityType: "approval" },
+    );
+
+    const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-focus-hold" });
+    const response = await harness.performAction<{ ok: boolean; snapshot: AttentionSnapshot }>("engage-focus", {
+      companyId: "company-focus-hold",
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
+      durationMs: 1000,
+      reason: "test_hold",
+    });
+
+    expect(response.ok).toBe(true);
+    expect(response.snapshot.now?.title).toBe("Approve pricing memo");
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "focus_engaged",
+        dimensions: expect.objectContaining({
+          surface: "focus",
+          actionKind: "engage",
+          reason: "test_hold",
+        }),
+      }),
+    ]));
+  });
+
   it("captures run failures as high-salience updates", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);

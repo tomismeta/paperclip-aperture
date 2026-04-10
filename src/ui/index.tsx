@@ -71,6 +71,9 @@ type DisplayFrame = {
   lane: FrameLane;
 };
 
+const FOCUS_HOLD_CONTEXT_MS = 20_000;
+const FOCUS_HOLD_COMPOSE_MS = 45_000;
+
 function contextValue(frame: StoredAttentionFrame, id: string): string | undefined {
   const item = frame.context?.items?.find((entry) => entry.id === id);
   return typeof item?.value === "string" && item.value.trim().length > 0 ? item.value : undefined;
@@ -711,6 +714,7 @@ function NowActionRail(props: {
   wide?: boolean;
   pendingId: string | null;
   itemLink: string | null;
+  onEngageFocus: (frame: StoredAttentionFrame, reason: string, durationMs: number) => void;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
@@ -784,7 +788,10 @@ function NowActionRail(props: {
               label="Comment"
               tone="accent"
               disabled={isPending}
-              onClick={() => setCommentOpen(true)}
+              onClick={() => {
+                props.onEngageFocus(props.frame, "comment_compose", FOCUS_HOLD_COMPOSE_MS);
+                setCommentOpen(true);
+              }}
             />
           ) : null}
           <ActionButton
@@ -864,6 +871,7 @@ function NowPane(props: {
   companyPrefix: string | null | undefined;
   counts: AttentionSnapshot["counts"];
   pendingId: string | null;
+  onEngageFocus: (frame: StoredAttentionFrame, reason: string, durationMs: number) => void;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
@@ -957,7 +965,12 @@ function NowPane(props: {
                 <div className="flex items-center gap-4">
                   <Accent><button
                     type="button"
-                    onClick={() => setDetailsOpen(!detailsOpen)}
+                    onClick={() => {
+                      if (!detailsOpen) {
+                        props.onEngageFocus(frame, "show_context", FOCUS_HOLD_CONTEXT_MS);
+                      }
+                      setDetailsOpen(!detailsOpen);
+                    }}
                     aria-expanded={detailsOpen}
                     className="flex items-center gap-1.5 text-xs font-medium transition-opacity hover:opacity-100"
                     style={{ color: "inherit" }}
@@ -981,6 +994,7 @@ function NowPane(props: {
                 wide={wideLayout}
                 pendingId={props.pendingId}
                 itemLink={itemLink}
+                onEngageFocus={props.onEngageFocus}
                 onApprove={props.onApprove}
                 onReject={props.onReject}
                 onRequestRevision={props.onRequestRevision}
@@ -1378,9 +1392,11 @@ export function AttentionPage(props: PluginPageProps) {
   const error = model.error;
   const acknowledge = usePluginAction("acknowledge-frame");
   const commentOnIssue = usePluginAction("comment-on-issue");
+  const engageFocus = usePluginAction("engage-focus");
   const recordApprovalResponse = usePluginAction("record-approval-response");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [statusOverride, setStatusOverride] = useState<string | null>(null);
+  const focusReleaseTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!statusOverride) return;
@@ -1394,6 +1410,14 @@ export function AttentionPage(props: PluginPageProps) {
     };
   }, [statusOverride]);
 
+  useEffect(() => {
+    return () => {
+      if (focusReleaseTimerRef.current) {
+        window.clearTimeout(focusReleaseTimerRef.current);
+      }
+    };
+  }, []);
+
   const displaySnapshot = snapshot;
   const backgroundErrorMessage = displaySnapshot && error ? `Sync issue: ${error.message}` : null;
   const posture = useMemo(() => (displaySnapshot ? postureForSnapshot(displaySnapshot) : null), [displaySnapshot]);
@@ -1406,6 +1430,31 @@ export function AttentionPage(props: PluginPageProps) {
     [displaySnapshot],
   );
   const nextMovement = useQueueMovement(nextRows.map((row) => row.frame));
+
+  async function holdNowFrame(frame: StoredAttentionFrame, reason: string, durationMs: number) {
+    if (!companyId) return;
+    if (displaySnapshot?.now?.interactionId !== frame.interactionId) return;
+
+    try {
+      await engageFocus({
+        companyId,
+        taskId: frame.taskId,
+        interactionId: frame.interactionId,
+        reason,
+        durationMs,
+      });
+      model.refresh();
+      if (focusReleaseTimerRef.current) {
+        window.clearTimeout(focusReleaseTimerRef.current);
+      }
+      focusReleaseTimerRef.current = window.setTimeout(() => {
+        model.refresh();
+        focusReleaseTimerRef.current = null;
+      }, durationMs + 150);
+    } catch {
+      // Keep this silent; failed focus hold should not interrupt operator work.
+    }
+  }
 
   async function acknowledgeFrame(frame: StoredAttentionFrame) {
     setPendingId(frame.id);
@@ -1510,6 +1559,7 @@ export function AttentionPage(props: PluginPageProps) {
         companyPrefix={props.context.companyPrefix}
         counts={displaySnapshot.counts}
         pendingId={pendingId}
+        onEngageFocus={holdNowFrame}
         onApprove={(frame) => submitApprovalDecision(frame, "approve")}
         onReject={(frame) => submitApprovalDecision(frame, "reject")}
         onRequestRevision={requestApprovalRevision}

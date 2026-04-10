@@ -114,7 +114,9 @@ export class ApertureCompanyStore {
   }
 
   getSnapshot(companyId: string): AttentionSnapshot | null {
-    return this.sessions.get(companyId)?.snapshot ?? null;
+    const session = this.sessions.get(companyId);
+    if (!session) return null;
+    return this.syncSnapshotFromCore(companyId, session);
   }
 
   getLedger(companyId: string): AttentionLedger {
@@ -276,6 +278,25 @@ export class ApertureCompanyStore {
     return this.sessions.size;
   }
 
+  engage(
+    companyId: string,
+    taskId: string,
+    interactionId: string,
+    options: { durationMs?: number } = {},
+  ): {
+    snapshot: AttentionSnapshot;
+    changed: boolean;
+  } {
+    const session = this.ensureSession(companyId);
+    const previousSnapshot = this.syncSnapshotFromCore(companyId, session);
+    session.core.engage(taskId, interactionId, options);
+    const snapshot = this.syncSnapshotFromCore(companyId, session);
+    return {
+      snapshot,
+      changed: !sameSnapshotAttention(previousSnapshot, snapshot),
+    };
+  }
+
   private ensureSession(companyId: string): CompanySession {
     let session = this.sessions.get(companyId);
     if (session) return session;
@@ -307,4 +328,41 @@ export class ApertureCompanyStore {
 
     return session;
   }
+
+  private syncSnapshotFromCore(companyId: string, session: CompanySession): AttentionSnapshot {
+    const liveView = session.core.getAttentionView();
+    const currentSnapshot = session.snapshot;
+    if (currentSnapshot && sameSnapshotAttentionView(currentSnapshot, liveView)) {
+      return currentSnapshot;
+    }
+
+    const nextSnapshot = createAttentionSnapshot(
+      companyId,
+      liveView,
+      currentSnapshot?.lastEvent,
+    );
+    session.snapshot = nextSnapshot;
+    return nextSnapshot;
+  }
+}
+
+function sameSnapshotAttention(left: AttentionSnapshot | null, right: AttentionSnapshot | null): boolean {
+  if (!left || !right) return left === right;
+  return left.now?.interactionId === right.now?.interactionId
+    && sameInteractionOrder(left.next, right.next)
+    && sameInteractionOrder(left.ambient, right.ambient);
+}
+
+function sameSnapshotAttentionView(snapshot: AttentionSnapshot, view: ReturnType<ApertureCore["getAttentionView"]>): boolean {
+  return snapshot.now?.interactionId === view.now?.interactionId
+    && sameInteractionOrder(snapshot.next, view.next)
+    && sameInteractionOrder(snapshot.ambient, view.ambient);
+}
+
+function sameInteractionOrder(
+  left: Array<{ interactionId: string }>,
+  right: Array<{ interactionId: string }>,
+): boolean {
+  return left.length === right.length
+    && left.every((frame, index) => frame.interactionId === right[index]?.interactionId);
 }

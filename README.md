@@ -66,6 +66,7 @@ and agents                             attention now?    actually sees     to th
 - a Focus surface inside Paperclip
 - ranked `now`, `next`, and `ambient` attention lanes
 - embedded explainability in the Focus UI, including `Why now`, `Why next`, confidence, signals, thread context, and related activity
+- bounded focus hold while the operator is actively working the current `now` item, so `Show context` and inline commenting do not immediately lose the thread beneath them
 - approval handling, including budget-specific approval semantics
 - issue-aware operator language such as `review required`, `blocked`, and targeted recommended moves
 - agent-aware routing that distinguishes known company agents from human/operator roles when issue text references them

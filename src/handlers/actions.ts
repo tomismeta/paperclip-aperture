@@ -134,6 +134,40 @@ function approvalIdFromTaskId(taskId: string): string | null {
 }
 
 export function registerActionHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
+  ctx.actions.register("engage-focus", async (params) => {
+    const companyId = requireCompanyId(params);
+    const taskId = requireStringParam(params, "taskId");
+    const interactionId = requireStringParam(params, "interactionId");
+    const durationMs = typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
+      ? Math.max(25, Math.floor(params.durationMs))
+      : undefined;
+    const reason = typeof params.reason === "string" && params.reason.trim().length > 0
+      ? params.reason.trim()
+      : "operator_interaction";
+
+    const currentSnapshot = store.getSnapshot(companyId);
+    const { snapshot, changed } = store.engage(companyId, taskId, interactionId, { durationMs });
+
+    if (changed) {
+      emitAttentionUpdate(ctx, {
+        companyId,
+        reason: "action",
+        eventType: "plugin.local.engage",
+        updatedAt: snapshot.updatedAt,
+        counts: snapshot.counts,
+      });
+    }
+
+    await trackFocusTelemetry(ctx, "focus_engaged", {
+      ...focusDimensions(currentSnapshot, taskId),
+      actionKind: "engage",
+      reason,
+      ...(durationMs ? { durationMs } : {}),
+    });
+
+    return { ok: true, snapshot, changed };
+  });
+
   ctx.actions.register("acknowledge-frame", async (params) => {
     const companyId = requireCompanyId(params);
     const taskId = requireStringParam(params, "taskId");
