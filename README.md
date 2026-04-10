@@ -162,6 +162,7 @@ Then open `http://127.0.0.1:3100/APE/aperture` and verify:
 
 - Plugin on npm: [`@tomismeta/paperclip-aperture`](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
 - Roadmap and releasing: [docs/ROADMAP.md](./docs/ROADMAP.md)
+- Architecture remediation note: [docs/AUDIT-REMEDIATION-2026-04.md](./docs/AUDIT-REMEDIATION-2026-04.md)
 - Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
 - Aperture Core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
 - Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
