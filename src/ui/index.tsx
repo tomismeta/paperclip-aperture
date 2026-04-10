@@ -1,15 +1,11 @@
 import {
   usePluginAction,
-  usePluginData,
-  usePluginStream,
   type PluginPageProps,
   type PluginSidebarProps,
   type PluginWidgetProps,
 } from "@paperclipai/plugin-sdk/ui";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  type AttentionDisplayPayload,
-  type AttentionReviewState,
   type AttentionSnapshot,
   type StoredAttentionFrame,
 } from "../aperture/types.js";
@@ -18,14 +14,45 @@ import {
   isBudgetOverride,
   type FrameLane,
 } from "../aperture/frame-model.js";
+import { readFocusMetadata } from "../aperture/contracts.js";
 import { explainFrame, signalStrengthLabel } from "../aperture/explainability.js";
-import {
-  mergeSnapshotWithApprovals,
-  type ApprovalRecord,
-} from "../aperture/approval-frames.js";
 import { ATTENTION_CONTEXT_IDS } from "../aperture/attention-context.js";
 import { GENERIC_QUEUED_JUDGMENT, genericJudgmentLine } from "../aperture/attention-language.js";
 import { issueBlocksTargetLine, issueNeedsActionFromLine } from "../aperture/issue-intelligence.js";
+import {
+  ACCENT_BG,
+  ACCENT_BG_STYLE,
+  ACCENT_BORDER,
+  ACCENT_COLOR,
+  Accent,
+  ActionButton,
+  Badge,
+  ExternalLinkIcon,
+  MessageCard,
+  PageLoadingState,
+  QueueMovementBadge,
+  QuietMark,
+  StatusToast,
+  UnreadDot,
+  WidgetLoadingState,
+  cn,
+  useWideLayout,
+} from "./chrome.js";
+import {
+  actionableCount,
+  actionableLabel,
+  currentSurfaceBrand,
+  formatRelativeTime,
+  pluginPagePath,
+  postureForSnapshot,
+  sourceLabel,
+  type Posture,
+  type QueueMovement,
+  type SurfaceBrand,
+  unreadCount,
+  useAttentionModel,
+  useQueueMovement,
+} from "./focus-model.js";
 import {
   acknowledgeFailureMessage,
   acknowledgeSuccessMessage,
@@ -43,113 +70,6 @@ type DisplayFrame = {
   frame: StoredAttentionFrame;
   lane: FrameLane;
 };
-type Posture = {
-  glyph: "\u25CB" | "\u25D0" | "\u25CF";
-  label: "calm" | "elevated" | "busy";
-};
-type ApprovalQueryResult = {
-  data: ApprovalRecord[] | null;
-  loading: boolean;
-  error: { message: string } | null;
-  refresh: () => void;
-};
-type SurfaceLabel = "focus";
-type SurfaceBrand = {
-  key: SurfaceLabel;
-  wordmark: string;
-  headingEmptyState: string;
-  loadingLabel: string;
-};
-
-// Aperture brand accent
-// Uses inline styles because the host Tailwind JIT won't scan plugin bundles
-// for arbitrary values.
-const ACCENT_COLOR = "#007ACC";
-const ACCENT_BG = `${ACCENT_COLOR}14`;
-const ACCENT_BORDER = `${ACCENT_COLOR}33`;
-const ACCENT_BG_STYLE: React.CSSProperties = { backgroundColor: ACCENT_COLOR };
-const ATTENTION_UPDATES_STREAM = "attention-updates";
-
-function currentSurfaceBrand(): SurfaceBrand {
-  return {
-    key: "focus",
-    wordmark: "Focus",
-    headingEmptyState: "No focus state yet.",
-    loadingLabel: "Loading Focus…",
-  };
-}
-
-/**
- * Forces accent color with !important to override any host Tailwind rules.
- */
-function useAccentColor<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
-  useEffect(() => {
-    ref.current?.style.setProperty("color", ACCENT_COLOR, "important");
-  });
-  return ref;
-}
-
-function Accent({ children, className }: { children: React.ReactNode; className?: string }) {
-  const ref = useAccentColor<HTMLSpanElement>();
-  return <span ref={ref} className={className}>{children}</span>;
-}
-
-function QuietMark({ size = "sm" }: { size?: "sm" | "md" }) {
-  const dimension = size === "md" ? 10 : 8;
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block shrink-0 rounded-full border"
-      style={{ width: dimension, height: dimension, borderColor: ACCENT_BORDER }}
-    />
-  );
-}
-
-function useWideLayout(minWidth = 1024) {
-  const [matches, setMatches] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-
-    const query = window.matchMedia(`(min-width: ${minWidth}px)`);
-    const update = () => setMatches(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, [minWidth]);
-
-  return matches;
-}
-
-function cn(...parts: Array<string | false | null | undefined>): string {
-  return parts.filter(Boolean).join(" ");
-}
-
-function pluginPagePath(companyPrefix: string | null | undefined): string {
-  return companyPrefix ? `/${companyPrefix}/aperture` : "/aperture";
-}
-
-function formatRelativeTime(value: string): string {
-  const timestamp = new Date(value).getTime();
-  if (Number.isNaN(timestamp)) return "recently";
-
-  const elapsedMs = timestamp - Date.now();
-  const elapsedMinutes = Math.round(elapsedMs / 60000);
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-
-  if (Math.abs(elapsedMinutes) < 60) return formatter.format(elapsedMinutes, "minute");
-
-  const elapsedHours = Math.round(elapsedMinutes / 60);
-  if (Math.abs(elapsedHours) < 24) return formatter.format(elapsedHours, "hour");
-
-  const elapsedDays = Math.round(elapsedHours / 24);
-  return formatter.format(elapsedDays, "day");
-}
-
-function sourceLabel(frame: StoredAttentionFrame): string {
-  return frame.source?.label ?? "Paperclip";
-}
 
 function contextValue(frame: StoredAttentionFrame, id: string): string | undefined {
   const item = frame.context?.items?.find((entry) => entry.id === id);
@@ -194,17 +114,18 @@ function operatorDriverLabel(value: string): string {
 function driverLabel(frame: StoredAttentionFrame): string | null {
   if (isBudgetOverride(frame)) return "budget stop";
 
-  const issueStatus = frame.metadata?.issueStatus;
+  const metadata = readFocusMetadata(frame);
+  const issueStatus = metadata.issueStatus;
   if (typeof issueStatus === "string" && issueStatus.trim().length > 0) {
     return operatorDriverLabel(issueStatus);
   }
 
-  const pauseReason = frame.metadata?.pauseReason;
+  const pauseReason = metadata.pauseReason;
   if (typeof pauseReason === "string" && pauseReason.trim().length > 0) {
     return operatorDriverLabel(pauseReason);
   }
 
-  const agentStatus = frame.metadata?.agentStatus;
+  const agentStatus = metadata.agentStatus;
   if (typeof agentStatus === "string" && agentStatus.trim().length > 0) {
     return operatorDriverLabel(agentStatus);
   }
@@ -222,33 +143,6 @@ function driverBadgeStyle(): { className: string; style: React.CSSProperties } {
 function requestDescriptor(frame: StoredAttentionFrame): string {
   const driver = driverLabel(frame);
   return driver ? `${sourceLabel(frame)} \u00b7 ${driver}` : sourceLabel(frame);
-}
-
-function postureForSnapshot(snapshot: AttentionSnapshot): Posture {
-  const current = snapshot.now;
-
-  if (
-    current?.tone === "critical"
-    || current?.consequence === "high"
-    || snapshot.counts.now + snapshot.counts.next >= 3
-  ) {
-    return { glyph: "\u25CF", label: "busy" };
-  }
-
-  if (snapshot.counts.now > 0 || snapshot.counts.next > 0 || snapshot.counts.ambient > 0) {
-    return { glyph: "\u25D0", label: "elevated" };
-  }
-
-  return { glyph: "\u25CB", label: "calm" };
-}
-
-function actionableCount(snapshot: AttentionSnapshot): number {
-  return (snapshot.now ? 1 : 0) + snapshot.next.length;
-}
-
-function actionableLabel(snapshot: AttentionSnapshot): string | null {
-  const actionable = actionableCount(snapshot);
-  return actionable > 0 ? `${actionable} action${actionable === 1 ? "" : "s"}` : null;
 }
 
 function judgmentLine(frame: StoredAttentionFrame, lane: FrameLane): string {
@@ -329,7 +223,8 @@ function costsHref(companyPrefix: string | null | undefined): string | null {
 
 function activityHref(frame: StoredAttentionFrame, companyPrefix: string | null | undefined): string | null {
   if (!companyPrefix) return null;
-  return frame.metadata?.activityPath ? `/${companyPrefix}/${frame.metadata.activityPath}` : null;
+  const metadata = readFocusMetadata(frame);
+  return metadata.activityPath ? `/${companyPrefix}/${metadata.activityPath}` : null;
 }
 
 function primaryLinkLabel(frame: StoredAttentionFrame): string {
@@ -360,280 +255,14 @@ function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" 
   return "none";
 }
 
-function unreadCount(snapshot: AttentionSnapshot | null | undefined): number {
-  return snapshot?.review?.unread.total ?? 0;
-}
-
-function applyLocalSuppressions(
-  snapshot: AttentionSnapshot | null,
-  suppressedAtByTaskId: Record<string, string>,
-): AttentionSnapshot | null {
-  if (!snapshot || Object.keys(suppressedAtByTaskId).length === 0) return snapshot;
-
-  const keepFrame = (frame: StoredAttentionFrame) => {
-    const suppressedAt = suppressedAtByTaskId[frame.taskId];
-    if (!suppressedAt) return true;
-    return frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(suppressedAt) > 0;
-  };
-
-  const next = snapshot.next.filter(keepFrame);
-  const ambient = snapshot.ambient.filter(keepFrame);
-  const nowCandidate = snapshot.now && keepFrame(snapshot.now) ? snapshot.now : null;
-  const now = nowCandidate ?? next[0] ?? null;
-  const nextFrames = nowCandidate ? next : next.slice(1);
-
-  return {
-    ...snapshot,
-    now,
-    next: nextFrames,
-    ambient,
-    counts: {
-      now: now ? 1 : 0,
-      next: nextFrames.length,
-      ambient: ambient.length,
-      total: (now ? 1 : 0) + nextFrames.length + ambient.length,
-    },
-  };
-}
-
-function suppressionMapFromReview(review: AttentionReviewState | null | undefined): Record<string, string> {
-  if (!review) return {};
-
-  return Object.fromEntries(
-    Object.entries(review.frames)
-      .filter(([, state]) => typeof state?.suppressedAt === "string" && state.suppressedAt.length > 0)
-      .map(([taskId, state]) => [taskId, state.suppressedAt as string]),
-  );
-}
-
 function isFrameUnreadInSnapshot(frame: StoredAttentionFrame, snapshot: AttentionSnapshot): boolean {
   const seenAt = snapshot.review?.lastSeenAt;
   if (!seenAt) return true;
   return frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(seenAt) > 0;
 }
 
-function UnreadDot(props: { visible: boolean; tone?: "default" | "muted"; reserveSpace?: boolean }) {
-  const tone = props.tone ?? "default";
-  if (!props.visible && !props.reserveSpace) return null;
-
-  const style = props.visible
-    ? tone === "muted"
-      ? { backgroundColor: ACCENT_BORDER }
-      : ACCENT_BG_STYLE
-    : { backgroundColor: "transparent" };
-
-  return <span className="inline-block h-2 w-2 rounded-full shrink-0" style={style} aria-label={props.visible ? "Unread attention item" : undefined} />;
-}
-
-function ExternalLinkIcon() {
-  return (
-    <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-      <path d="M6.5 3.5h-3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-3" />
-      <path d="M8.5 1.5h6v6" />
-      <path d="M14.5 1.5l-7 7" />
-    </svg>
-  );
-}
-
-function SkeletonLine(props: { className?: string }) {
-  return <div className={cn("animate-pulse rounded bg-secondary/80", props.className)} aria-hidden="true" />;
-}
-
-function MessageCard(props: {
-  title: string;
-  body: string;
-  accent?: boolean;
-}) {
-  return (
-    <div className="border border-border bg-card p-4 shadow-sm">
-      <div className={cn("text-sm font-medium", props.accent && "text-foreground")}>
-        {props.title}
-      </div>
-      <div className="mt-1 text-sm text-muted-foreground">{props.body}</div>
-    </div>
-  );
-}
-
-function WidgetLoadingState({ label }: { label: string }) {
-  return (
-    <div className="border border-border bg-card px-4 py-3 shadow-sm">
-      <div className="flex items-start gap-3">
-        <SkeletonLine className="mt-0.5 h-3 w-3 rounded-full" />
-        <div className="flex-1 space-y-2">
-          <SkeletonLine className="h-3 w-20" />
-          <SkeletonLine className="h-4 w-48" />
-        </div>
-        <SkeletonLine className="h-3 w-24" />
-      </div>
-      <div className="sr-only">{label}</div>
-    </div>
-  );
-}
-
-function PageLoadingState({ label }: { label: string }) {
-  return (
-    <div className="space-y-5" aria-label={label}>
-      <div className="border border-border bg-card px-4 py-3 shadow-sm">
-        <div className="flex items-center justify-between gap-3">
-          <SkeletonLine className="h-4 w-44" />
-          <SkeletonLine className="h-8 w-28" />
-        </div>
-      </div>
-      <div className="border border-border bg-card shadow-sm">
-        <div className="border-b border-border px-4 py-3 sm:px-6">
-          <SkeletonLine className="h-4 w-36" />
-        </div>
-        <div className="space-y-4 px-4 py-5 sm:px-6">
-          <SkeletonLine className="h-3 w-16" />
-          <SkeletonLine className="h-7 w-2/3" />
-          <div className="flex gap-2">
-            <SkeletonLine className="h-6 w-24" />
-            <SkeletonLine className="h-6 w-20" />
-            <SkeletonLine className="h-6 w-16" />
-          </div>
-          <SkeletonLine className="h-10 w-56" />
-        </div>
-      </div>
-      <div className="border border-border bg-card shadow-sm">
-        <div className="border-b border-border px-4 py-3 sm:px-6">
-          <SkeletonLine className="h-3 w-12" />
-        </div>
-        <div className="space-y-3 px-4 py-4 sm:px-6">
-          <SkeletonLine className="h-4 w-full" />
-          <SkeletonLine className="h-4 w-5/6" />
-          <SkeletonLine className="h-4 w-2/3" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatusToast({ message }: { message: string | null }) {
-  return (
-    <div
-      className={cn(
-        "pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 transition-all duration-200",
-        message ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0",
-      )}
-      aria-live="polite"
-      aria-atomic="true"
-    >
-      {message ? (
-        <div className="min-w-72 max-w-md rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground shadow-lg">
-          {message}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function readCsrfToken(): string | null {
-  if (typeof document === "undefined") return null;
-  const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content");
-  return token && token.trim().length > 0 ? token : null;
-}
-
-// Temporary host API bridge until the plugin SDK exposes approval reads/writes.
-async function paperclipApiFetch<TResponse = unknown>(
-  path: string,
-  options: RequestInit & { retries?: number; expectJson?: boolean } = {},
-): Promise<TResponse> {
-  const csrfToken = readCsrfToken();
-  const {
-    retries = 0,
-    expectJson = true,
-    headers,
-    ...init
-  } = options;
-
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try {
-      const response = await window.fetch(path, {
-        credentials: "same-origin",
-        ...init,
-        headers: {
-          Accept: "application/json",
-          "X-Requested-With": "XMLHttpRequest",
-          ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
-          ...(headers ?? {}),
-        },
-      });
-
-      if (!response.ok) {
-        const responseBody = await response.text().catch(() => "");
-        const detail = responseBody.trim().length > 0 ? `: ${responseBody.trim()}` : "";
-        throw new Error(`Request failed (${response.status})${detail}`);
-      }
-
-      if (!expectJson) return undefined as TResponse;
-      return await response.json() as TResponse;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (attempt >= retries) break;
-      await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)));
-    }
-  }
-
-  throw lastError ?? new Error("Request failed.");
-}
-
 function compactTitle(frame: StoredAttentionFrame): string {
   return frame.title.trim().length > 0 ? frame.title : "Untitled frame";
-}
-
-function usePendingApprovals(companyId: string | null | undefined): ApprovalQueryResult {
-  const [data, setData] = useState<ApprovalRecord[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<{ message: string } | null>(null);
-  const [refreshVersion, setRefreshVersion] = useState(0);
-
-  useEffect(() => {
-    if (!companyId) {
-      setData(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    async function loadApprovals() {
-      try {
-        setError(null);
-        const approvals = await paperclipApiFetch<ApprovalRecord[]>(`/api/companies/${companyId}/approvals?status=pending`, {
-          method: "GET",
-          retries: 1,
-        });
-        if (!cancelled) {
-          setData(approvals);
-          setLoading(false);
-        }
-      } catch (fetchError) {
-        if (!cancelled) {
-          setError({ message: fetchError instanceof Error ? fetchError.message : String(fetchError) });
-          setLoading(false);
-        }
-      }
-    }
-
-    setLoading(true);
-    void loadApprovals();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [companyId, refreshVersion]);
-
-  return {
-    data,
-    loading,
-    error,
-    refresh: () => {
-      setRefreshVersion((value) => value + 1);
-    },
-  };
 }
 
 // Highlight entity-like tokens in the title (agent names, identifiers like CAM-9)
@@ -666,203 +295,6 @@ function HighlightedTitle({ text }: { text: string }) {
 
 function renderTitle(frame: StoredAttentionFrame): ReactNode {
   return <HighlightedTitle text={compactTitle(frame)} />;
-}
-
-function useAttentionPolling(
-  companyId: string | null | undefined,
-  refreshers: Array<() => void>,
-  intervalMs = 5000,
-): void {
-  const refreshersRef = useRef(refreshers);
-  refreshersRef.current = refreshers;
-
-  useEffect(() => {
-    if (!companyId) return;
-
-    function refreshVisible() {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      for (const refresh of refreshersRef.current) refresh();
-    }
-
-    const timer = window.setInterval(() => {
-      refreshVisible();
-    }, intervalMs);
-
-    function handleVisibilityChange() {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        for (const refresh of refreshersRef.current) refresh();
-      }
-    }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [companyId, intervalMs]);
-}
-
-type QueueMovement = "up" | "down";
-
-function useQueueMovement(frames: StoredAttentionFrame[], ttlMs = 3500): Record<string, QueueMovement> {
-  const previousPositionsRef = useRef<Record<string, number>>({});
-  const timersRef = useRef<Record<string, number>>({});
-  const [movementById, setMovementById] = useState<Record<string, QueueMovement>>({});
-
-  useEffect(() => {
-    const nextPositions = Object.fromEntries(frames.map((frame, index) => [frame.interactionId, index]));
-
-    setMovementById((current) => {
-      const updates: Record<string, QueueMovement> = {};
-
-      for (const frame of frames) {
-        const previousIndex = previousPositionsRef.current[frame.interactionId];
-        const nextIndex = nextPositions[frame.interactionId];
-        if (typeof previousIndex !== "number" || previousIndex === nextIndex) continue;
-        updates[frame.interactionId] = nextIndex < previousIndex ? "up" : "down";
-      }
-
-      if (Object.keys(updates).length === 0) return current;
-
-      const merged = { ...current, ...updates };
-      for (const [interactionId, movement] of Object.entries(updates)) {
-        window.clearTimeout(timersRef.current[interactionId]);
-        timersRef.current[interactionId] = window.setTimeout(() => {
-          setMovementById((active) => {
-            if (active[interactionId] !== movement) return active;
-            const next = { ...active };
-            delete next[interactionId];
-            return next;
-          });
-          delete timersRef.current[interactionId];
-        }, ttlMs);
-      }
-
-      return merged;
-    });
-
-    previousPositionsRef.current = nextPositions;
-
-    return () => {
-      for (const timer of Object.values(timersRef.current)) window.clearTimeout(timer);
-    };
-  }, [frames, ttlMs]);
-
-  return movementById;
-}
-
-function useAttentionModel(companyId: string | null | undefined) {
-  const displayQuery = usePluginData<AttentionDisplayPayload>("attention-display", companyId ? { companyId } : undefined);
-  const approvalsQuery = usePendingApprovals(companyId);
-  const updates = usePluginStream<{ updatedAt: string; eventType: string }>(
-    ATTENTION_UPDATES_STREAM,
-    companyId ? { companyId } : undefined,
-  );
-
-  useAttentionPolling(companyId, [displayQuery.refresh, approvalsQuery.refresh]);
-
-  useEffect(() => {
-    if (!companyId || !updates.lastEvent) return;
-    displayQuery.refresh();
-    approvalsQuery.refresh();
-  }, [companyId, updates.lastEvent?.updatedAt, updates.lastEvent?.eventType]);
-
-  const snapshot = useMemo(
-    () => (
-      companyId
-        ? mergeSnapshotWithApprovals(displayQuery.data?.snapshot ?? null, companyId, approvalsQuery.data, displayQuery.data?.reviewState ?? null)
-        : null
-    ),
-    [displayQuery.data, approvalsQuery.data, companyId],
-  );
-
-  return {
-    snapshot,
-    review: displayQuery.data?.reviewState ?? null,
-    loading: displayQuery.loading || approvalsQuery.loading,
-    error: displayQuery.error ?? approvalsQuery.error,
-    refresh() {
-      displayQuery.refresh();
-      approvalsQuery.refresh();
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Primitives — aligned to Paperclip's design system
-// ---------------------------------------------------------------------------
-
-function Badge(props: { children: ReactNode; className?: string; style?: React.CSSProperties }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center justify-center rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap shrink-0",
-        props.className,
-      )}
-      style={props.style}
-    >
-      {props.children}
-    </span>
-  );
-}
-
-function ActionButton(props: {
-  label: string;
-  tone: "primary" | "danger" | "secondary" | "accent";
-  disabled?: boolean;
-  className?: string;
-  onClick: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const toneClass =
-    props.tone === "primary"
-      ? "bg-green-700 text-white hover:bg-green-600"
-      : props.tone === "accent"
-        ? "text-white"
-      : props.tone === "danger"
-        ? "bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
-        : "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50";
-
-  return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      disabled={props.disabled}
-      className={cn(
-        "inline-flex h-8 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium",
-        "transition-[color,background-color,border-color,box-shadow,opacity,filter]",
-        "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
-        "disabled:pointer-events-none disabled:opacity-50",
-        props.disabled && /…|\.\.\./.test(props.label) && "animate-pulse",
-        toneClass,
-        props.className,
-      )}
-      style={props.tone === "accent" ? { ...ACCENT_BG_STYLE, filter: hovered && !props.disabled ? "brightness(1.08)" : undefined } : undefined}
-    >
-      {props.label}
-    </button>
-  );
-}
-
-function QueueMovementBadge({ movement }: { movement?: QueueMovement }) {
-  if (!movement) return null;
-
-  return (
-    <span
-      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium"
-      style={{
-        color: ACCENT_COLOR,
-        backgroundColor: ACCENT_BG,
-        borderColor: ACCENT_BORDER,
-      }}
-    >
-      <span aria-hidden="true">{movement === "up" ? "\u2191" : "\u2193"}</span>
-      {movement === "up" ? "moved up" : "moved down"}
-    </span>
-  );
 }
 
 function FrameActions(props: {
@@ -1949,7 +1381,6 @@ export function AttentionPage(props: PluginPageProps) {
   const recordApprovalResponse = usePluginAction("record-approval-response");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [statusOverride, setStatusOverride] = useState<string | null>(null);
-  const [localSuppressions, setLocalSuppressions] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!statusOverride) return;
@@ -1963,18 +1394,7 @@ export function AttentionPage(props: PluginPageProps) {
     };
   }, [statusOverride]);
 
-  const persistedSuppressions = useMemo(
-    () => suppressionMapFromReview(model.review),
-    [model.review],
-  );
-  const effectiveSuppressions = useMemo(
-    () => ({ ...persistedSuppressions, ...localSuppressions }),
-    [persistedSuppressions, localSuppressions],
-  );
-  const displaySnapshot = useMemo(
-    () => applyLocalSuppressions(snapshot, effectiveSuppressions),
-    [snapshot, effectiveSuppressions],
-  );
+  const displaySnapshot = snapshot;
   const backgroundErrorMessage = displaySnapshot && error ? `Sync issue: ${error.message}` : null;
   const posture = useMemo(() => (displaySnapshot ? postureForSnapshot(displaySnapshot) : null), [displaySnapshot]);
   const nextRows = useMemo(
@@ -1987,46 +1407,13 @@ export function AttentionPage(props: PluginPageProps) {
   );
   const nextMovement = useQueueMovement(nextRows.map((row) => row.frame));
 
-  useEffect(() => {
-    if (!snapshot) return;
-
-    setLocalSuppressions((current) => {
-      const nextEntries = Object.entries(current).filter(([taskId, suppressedAt]) => {
-        const frames = [
-          ...(snapshot.now ? [snapshot.now] : []),
-          ...snapshot.next,
-          ...snapshot.ambient,
-        ];
-        const matching = frames.filter((frame) => frame.taskId === taskId);
-        if (matching.length === 0 && persistedSuppressions[taskId]) return false;
-        if (matching.length === 0) return false;
-        return matching.some((frame) => frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(suppressedAt) <= 0);
-      });
-
-      if (nextEntries.length === Object.keys(current).length) return current;
-      return Object.fromEntries(nextEntries);
-    });
-  }, [snapshot, persistedSuppressions]);
-
-  function nudgeRefresh() {
-    model.refresh();
-    window.setTimeout(() => model.refresh(), 500);
-  }
-
   async function acknowledgeFrame(frame: StoredAttentionFrame) {
     setPendingId(frame.id);
-    const suppressedAt = new Date().toISOString();
-    setLocalSuppressions((current) => ({ ...current, [frame.taskId]: suppressedAt }));
     try {
       await acknowledge({ companyId, taskId: frame.taskId, interactionId: frame.interactionId });
       setStatusOverride(acknowledgeSuccessMessage(compactTitle(frame)));
-      nudgeRefresh();
+      model.refresh();
     } catch (actionError) {
-      setLocalSuppressions((current) => {
-        const next = { ...current };
-        delete next[frame.taskId];
-        return next;
-      });
       setStatusOverride(acknowledgeFailureMessage(actionError));
     } finally {
       setPendingId(null);
@@ -2044,7 +1431,7 @@ export function AttentionPage(props: PluginPageProps) {
     try {
       await commentOnIssue({ companyId, taskId: frame.taskId, issueId, body });
       setStatusOverride(commentSuccessMessage(compactTitle(frame)));
-      nudgeRefresh();
+      model.refresh();
     } catch (actionError) {
       setStatusOverride(commentFailureMessage(actionError));
     } finally {
@@ -2060,18 +1447,7 @@ export function AttentionPage(props: PluginPageProps) {
     }
 
     setPendingId(frame.id);
-    const suppressedAt = new Date().toISOString();
-    setLocalSuppressions((current) => ({ ...current, [frame.taskId]: suppressedAt }));
     try {
-      const actionPath = decision === "approve" ? "approve" : "reject";
-      await paperclipApiFetch(`/api/approvals/${approvalId}/${actionPath}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-        expectJson: false,
-      });
       await recordApprovalResponse({
         companyId,
         taskId: frame.taskId,
@@ -2080,13 +1456,8 @@ export function AttentionPage(props: PluginPageProps) {
       });
 
       setStatusOverride(approvalDecisionSuccessMessage(compactTitle(frame), decision));
-      nudgeRefresh();
+      model.refresh();
     } catch (actionError) {
-      setLocalSuppressions((current) => {
-        const next = { ...current };
-        delete next[frame.taskId];
-        return next;
-      });
       setStatusOverride(approvalDecisionFailureMessage(actionError));
     } finally {
       setPendingId(null);
@@ -2101,17 +1472,7 @@ export function AttentionPage(props: PluginPageProps) {
     }
 
     setPendingId(frame.id);
-    const suppressedAt = new Date().toISOString();
-    setLocalSuppressions((current) => ({ ...current, [frame.taskId]: suppressedAt }));
     try {
-      await paperclipApiFetch(`/api/approvals/${approvalId}/request-revision`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-        expectJson: false,
-      });
       await recordApprovalResponse({
         companyId,
         taskId: frame.taskId,
@@ -2120,13 +1481,8 @@ export function AttentionPage(props: PluginPageProps) {
       });
 
       setStatusOverride(approvalRevisionSuccessMessage(compactTitle(frame)));
-      nudgeRefresh();
+      model.refresh();
     } catch (actionError) {
-      setLocalSuppressions((current) => {
-        const next = { ...current };
-        delete next[frame.taskId];
-        return next;
-      });
       setStatusOverride(approvalRevisionFailureMessage(actionError));
     } finally {
       setPendingId(null);

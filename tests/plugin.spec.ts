@@ -3,6 +3,7 @@ import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { Agent, Issue, IssueComment, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import manifest from "../src/manifest.js";
 import type { AttentionExport, AttentionReplayScenario, AttentionReviewState, AttentionSnapshot } from "../src/aperture/types.js";
+import type { ApprovalRecord } from "../src/aperture/approval-frames.js";
 import plugin from "../src/worker.js";
 import {
   ATTENTION_LEDGER_STATE_KEY,
@@ -109,6 +110,45 @@ function createIssueDocumentSummary(overrides: Partial<IssueDocumentSummary> = {
     updatedAt: new Date("2026-03-19T10:15:00.000Z"),
     ...overrides,
   };
+}
+
+function createApprovalRecord(overrides: Partial<ApprovalRecord> = {}): ApprovalRecord {
+  return {
+    id: "approval-1",
+    companyId: "company-live",
+    type: "approve_ceo_strategy",
+    status: "pending",
+    payload: {
+      title: "Approve launch cutover",
+      summary: "Launch cutover is waiting on a human decision.",
+    },
+    createdAt: "2026-03-19T10:00:00.000Z",
+    updatedAt: "2026-03-19T10:05:00.000Z",
+    ...overrides,
+  };
+}
+
+function mockApprovalApi(
+  harness: ReturnType<typeof createTestHarness>,
+  approvals: Array<Record<string, unknown>> = [],
+) {
+  harness.ctx.http.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("/api/companies/") && url.includes("/approvals?status=pending")) {
+      return new Response(JSON.stringify(approvals), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (
+      url.includes("/api/approvals/")
+      && init?.method === "POST"
+    ) {
+      return new Response("", { status: 200 });
+    }
+
+    throw new Error(`Unhandled approval API request in test: ${url}`);
+  });
 }
 
 describe("paperclip aperture", () => {
@@ -259,6 +299,7 @@ describe("paperclip aperture", () => {
   it("records approval responses through the plugin action path and clears the frame after restart", async () => {
     const firstHarness = createTestHarness({ manifest });
     await plugin.definition.setup(firstHarness.ctx);
+    mockApprovalApi(firstHarness);
 
     await firstHarness.emit(
       "approval.created",
@@ -325,6 +366,7 @@ describe("paperclip aperture", () => {
   it("persists approval suppression even when the approval frame only exists in the UI layer", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness);
 
     await harness.performAction("record-approval-response", {
       companyId: "company-approval-ui-only",
@@ -981,6 +1023,7 @@ describe("paperclip aperture", () => {
     expect(beforeResponse.responseEntries).toHaveLength(0);
     expect(beforeResponse.traces.length).toBeGreaterThan(0);
     expect(beforeResponse.reconciledSnapshot.now?.title).toBe("Approve launch cutover");
+    expect(beforeResponse.displaySnapshot.now?.title).toBe("Approve launch cutover");
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-export",
@@ -994,6 +1037,7 @@ describe("paperclip aperture", () => {
     expect(afterResponse.responseEntries).toHaveLength(1);
     expect(afterResponse.traces.length).toBeGreaterThanOrEqual(beforeResponse.traces.length);
     expect(afterResponse.snapshot.now).toBeNull();
+    expect(afterResponse.displaySnapshot.now).toBeNull();
   });
 
   it("exposes recent core traces for debugging exports", async () => {
@@ -1039,6 +1083,70 @@ describe("paperclip aperture", () => {
         entityType: "issue",
       },
     });
+  });
+
+  it("builds the final display snapshot in the worker by merging pending approvals", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, [createApprovalRecord({ companyId: "company-display" })]);
+
+    const display = await harness.getData<{ snapshot: AttentionSnapshot }>("attention-display", {
+      companyId: "company-display",
+    });
+
+    expect(display.snapshot.now?.taskId).toBe("approval:approval-1");
+    expect(display.snapshot.now?.title).toBe("Approve launch cutover");
+  });
+
+  it("reuses cached display reconciliation until an invalidating activity event arrives", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, []);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const originalListIssues = harness.ctx.issues.list.bind(harness.ctx.issues);
+    const originalListComments = harness.ctx.issues.listComments.bind(harness.ctx.issues);
+    const originalListDocuments = harness.ctx.issues.documents.list.bind(harness.ctx.issues.documents);
+
+    const listIssues = vi.fn(originalListIssues);
+    const listComments = vi.fn(originalListComments);
+    const listDocuments = vi.fn(originalListDocuments);
+
+    harness.ctx.issues.list = listIssues;
+    harness.ctx.issues.listComments = listComments;
+    harness.ctx.issues.documents.list = listDocuments;
+
+    await harness.getData("attention-display", { companyId: "company-live" });
+    const issueCallsAfterFirstRead = listIssues.mock.calls.length;
+    const commentCallsAfterFirstRead = listComments.mock.calls.length;
+    const documentCallsAfterFirstRead = listDocuments.mock.calls.length;
+    const approvalCallsAfterFirstRead = (harness.ctx.http.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await harness.getData("attention-display", { companyId: "company-live" });
+
+    expect(listIssues.mock.calls.length).toBe(issueCallsAfterFirstRead);
+    expect(listComments.mock.calls.length).toBe(commentCallsAfterFirstRead);
+    expect(listDocuments.mock.calls.length).toBe(documentCallsAfterFirstRead);
+    expect((harness.ctx.http.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(approvalCallsAfterFirstRead);
+
+    await harness.emit(
+      "activity.logged",
+      {
+        action: "issue.document_created",
+        entityType: "issue",
+        entityId: "issue-1",
+      },
+      { companyId: "company-live", entityId: "issue-1", entityType: "issue" },
+    );
+
+    await harness.getData("attention-display", { companyId: "company-live" });
+
+    expect(listIssues.mock.calls.length).toBeGreaterThan(issueCallsAfterFirstRead);
+    expect(listComments.mock.calls.length).toBeGreaterThan(commentCallsAfterFirstRead);
+    expect(listDocuments.mock.calls.length).toBeGreaterThan(documentCallsAfterFirstRead);
   });
 
   it("exports a lab-compatible replay scenario from the attention ledger", async () => {

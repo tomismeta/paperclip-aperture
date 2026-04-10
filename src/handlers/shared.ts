@@ -145,15 +145,17 @@ export async function runAttentionMutation<T extends PersistedAttentionMutation>
 
   const previousLedger = store.getLedger(companyId);
   const previousSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
-  const previousReview = await ctx.state.get({
-    scopeKind: "company",
-    scopeId: companyId,
-    stateKey: ATTENTION_REVIEW_STATE_KEY,
-  });
+  const previousReview = store.getReview(companyId)
+    ?? await ctx.state.get({
+      scopeKind: "company",
+      scopeId: companyId,
+      stateKey: ATTENTION_REVIEW_STATE_KEY,
+    });
   let persistStarted = false;
 
   try {
     const result = await mutation();
+    if (result.review) store.setReview(companyId, result.review);
     persistStarted = true;
     await persistLedger(ctx, companyId, result.ledger);
     try {
@@ -188,6 +190,12 @@ export async function runAttentionMutation<T extends PersistedAttentionMutation>
     }
 
     store.rebuildFromLedger(companyId, previousLedger);
+    store.setReview(
+      companyId,
+      previousReview && typeof previousReview === "object"
+        ? previousReview as AttentionReviewState
+        : createEmptyReviewState(companyId),
+    );
     throw error;
   } finally {
     release();

@@ -183,18 +183,24 @@ function issueFrame(
         createdAt: toIsoString(issue.createdAt) ?? updatedAt,
         updatedAt,
       },
-      metadata: {
-        entityType: "issue",
-        issueStatus: issue.status,
-        issuePriority: issue.priority,
-        liveReconciled: true,
-        activityPath: comment ? "activity" : undefined,
-        attention: {
-          rationale: provenance.factors ?? [],
+        metadata: {
+          entityType: "issue",
+          issueStatus: issue.status,
+          issuePriority: issue.priority,
+          liveReconciled: true,
+          activityPath: comment ? "activity" : undefined,
+          attention: {
+            rationale: provenance.factors ?? [],
+          },
+          issueIntelligence: {
+            matchedRuleIds: analysis.matchedRuleIds,
+            owner: analysis.owner,
+            ownerKind: analysis.ownerKind,
+            blockingTarget: analysis.blockingTarget,
+          },
+          ...(semantic ? { semantic } : {}),
         },
-        ...(semantic ? { semantic } : {}),
       },
-    },
   };
 }
 
@@ -261,11 +267,11 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
         createdAt: toIsoString(agent.createdAt) ?? updatedAt,
         updatedAt,
       },
-      metadata: {
-        entityType: "agent",
-        agentStatus: agent.status,
-        pauseReason: agent.pauseReason,
-        liveReconciled: true,
+        metadata: {
+          entityType: "agent",
+          agentStatus: agent.status,
+          pauseReason: agent.pauseReason,
+          liveReconciled: true,
         activityPath: agent.status === "error" ? "activity" : undefined,
         attention: {
           rationale: provenance.factors ?? [],

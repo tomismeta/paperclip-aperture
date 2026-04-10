@@ -214,7 +214,7 @@ No. Aperture core was embedded as-is. The integration work lives in the plugin l
 
 ### "Did this require changing Paperclip core?"
 
-No for `0.2.x`. The plugin uses Paperclip's plugin model and same-origin UI APIs where the current SDK does not expose an equivalent worker surface.
+No. The plugin uses Paperclip's plugin model and the published plugin SDK, including worker-side HTTP/config/telemetry surfaces where the host does not yet expose a first-class approval client.
 
 ### "What is the product boundary?"
 

@@ -1,4 +1,5 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
+import { mergeSnapshotWithApprovals } from "../aperture/approval-frames.js";
 import { reconcileAttentionSnapshot } from "../aperture/reconciliation.js";
 import {
   type AttentionDisplayPayload,
@@ -16,19 +17,13 @@ import {
   type AttentionSnapshot,
 } from "../aperture/types.js";
 import { ApertureCompanyStore } from "../aperture/core-store.js";
+import { listPendingApprovals } from "../host/paperclip-approvals.js";
 import {
   ATTENTION_LEDGER_STATE_KEY,
   ATTENTION_REVIEW_STATE_KEY,
   ATTENTION_SNAPSHOT_STATE_KEY,
-  persistLedger,
-  persistReviewState,
-  persistSnapshot,
   requireCompanyId,
 } from "./shared.js";
-
-function isAttentionSnapshot(value: unknown, companyId: string): value is AttentionSnapshot {
-  return normalizeAttentionSnapshot(companyId, value) !== null;
-}
 
 function isLedgerSource(value: unknown): value is NonNullable<AttentionLedgerEntry["source"]> {
   if (!value || typeof value !== "object") return false;
@@ -74,10 +69,6 @@ function isAttentionReviewState(value: unknown, companyId: string): value is Att
   });
 }
 
-function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
 function laterIso(left: string | undefined, right: string | undefined): string | undefined {
   if (!left) return right;
   if (!right) return left;
@@ -120,66 +111,148 @@ function deriveReviewStateFromLedger(
   return review;
 }
 
-async function loadAttentionState(
-  ctx: PluginContext,
-  store: ApertureCompanyStore,
-  companyId: string,
-): Promise<{
-  persistedLedger: unknown;
+type HydratedAttentionState = {
+  legacySnapshotWithoutLedger: boolean;
   persistedSnapshot: AttentionSnapshot | null;
-  persistedReview: unknown;
   baseLedger: AttentionLedger;
   snapshot: AttentionSnapshot;
   reviewState: AttentionReviewState;
-}> {
-  const inMemoryLedger = store.getLedger(companyId);
-  const persistedLedger = await ctx.state.get({
+};
+
+async function ensureAttentionState(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+): Promise<HydratedAttentionState> {
+  if (store.hasSession(companyId)) {
+    return {
+      legacySnapshotWithoutLedger: false,
+      persistedSnapshot: store.getSnapshot(companyId),
+      baseLedger: store.getLedger(companyId),
+      snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+      reviewState: store.getReview(companyId) ?? createEmptyReviewState(companyId),
+    };
+  }
+
+  const persistedLedgerValue = await ctx.state.get({
     scopeKind: "company",
     scopeId: companyId,
     stateKey: ATTENTION_LEDGER_STATE_KEY,
   });
-  const persistedSnapshot = await ctx.state.get({
+  const persistedSnapshotValue = await ctx.state.get({
     scopeKind: "company",
     scopeId: companyId,
     stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
   });
-  const persistedReview = await ctx.state.get({
+  const persistedReviewValue = await ctx.state.get({
     scopeKind: "company",
     scopeId: companyId,
     stateKey: ATTENTION_REVIEW_STATE_KEY,
   });
-  const baseLedger = inMemoryLedger.length > 0
-    ? inMemoryLedger
-    : isAttentionLedger(persistedLedger)
-      ? persistedLedger
-      : createEmptyLedger();
-  const normalizedPersistedSnapshot = normalizeAttentionSnapshot(companyId, persistedSnapshot);
-
-  const snapshot = store.rebuildFromLedger(companyId, baseLedger);
+  const baseLedger = isAttentionLedger(persistedLedgerValue)
+    ? persistedLedgerValue
+    : createEmptyLedger();
+  const persistedSnapshot = normalizeAttentionSnapshot(companyId, persistedSnapshotValue);
   const reviewState = deriveReviewStateFromLedger(
     companyId,
     baseLedger,
-    isAttentionReviewState(persistedReview, companyId) ? persistedReview : null,
+    isAttentionReviewState(persistedReviewValue, companyId) ? persistedReviewValue : null,
   );
+  const { snapshot } = store.hydrate(companyId, {
+    ledger: baseLedger,
+    snapshot: persistedSnapshot,
+    review: reviewState,
+  });
+
+  if (!isAttentionLedger(persistedLedgerValue) && persistedSnapshot) {
+    ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", {
+      companyId,
+    });
+  }
 
   return {
-    persistedLedger,
-    persistedSnapshot: normalizedPersistedSnapshot,
-    persistedReview,
+    legacySnapshotWithoutLedger: !isAttentionLedger(persistedLedgerValue) && !!persistedSnapshot,
+    persistedSnapshot,
     baseLedger,
     snapshot,
     reviewState,
   };
 }
 
+function reconciliationCacheKey(
+  snapshot: AttentionSnapshot,
+  reviewState: AttentionReviewState,
+  config: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    snapshotUpdatedAt: snapshot.updatedAt,
+    reviewUpdatedAt: reviewState.updatedAt,
+    captureIssueLifecycle: config.captureIssueLifecycle !== false,
+    captureRunFailures: config.captureRunFailures !== false,
+  });
+}
+
 async function loadReconciledAttentionSnapshot(
   ctx: PluginContext,
+  store: ApertureCompanyStore,
   companyId: string,
   snapshot: AttentionSnapshot,
   reviewState: AttentionReviewState,
+  options: { preferCache?: boolean } = {},
 ): Promise<AttentionSnapshot> {
   const config = await ctx.config.get();
-  return reconcileAttentionSnapshot(ctx, companyId, snapshot, reviewState, config);
+  const cacheKey = reconciliationCacheKey(snapshot, reviewState, config);
+  if (options.preferCache) {
+    const cached = store.getCachedReconciledSnapshot(companyId, cacheKey);
+    if (cached) return cached;
+  }
+
+  const reconciled = await reconcileAttentionSnapshot(ctx, companyId, snapshot, reviewState, config);
+  if (options.preferCache) {
+    store.setCachedReconciledSnapshot(companyId, cacheKey, reconciled);
+  }
+  return reconciled;
+}
+
+async function loadWorkerApprovals(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+): Promise<ReturnType<typeof store.setApprovals>> {
+  const cached = store.getApprovals(companyId);
+  if (!store.approvalsDirty(companyId) && cached) return cached;
+
+  const config = await ctx.config.get();
+  try {
+    const approvals = await listPendingApprovals(ctx, companyId, config);
+    return store.setApprovals(companyId, approvals);
+  } catch (error) {
+    ctx.logger.warn("Failed to load pending approvals for Focus display", {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    if (cached) return cached;
+    return store.setApprovals(companyId, []);
+  }
+}
+
+async function loadDisplaySnapshot(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+  snapshot: AttentionSnapshot,
+  reviewState: AttentionReviewState,
+): Promise<{
+  reconciledSnapshot: AttentionSnapshot;
+  displaySnapshot: AttentionSnapshot;
+}> {
+  const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState, { preferCache: true });
+  const approvals = await loadWorkerApprovals(ctx, store, companyId);
+
+  return {
+    reconciledSnapshot,
+    displaySnapshot: mergeSnapshotWithApprovals(reconciledSnapshot, companyId, approvals, reviewState),
+  };
 }
 
 export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
@@ -193,74 +266,29 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
 
   ctx.data.register("attention-summary", async (params) => {
     const companyId = requireCompanyId(params);
-    const {
-      persistedLedger,
-      persistedSnapshot,
-      persistedReview,
-      baseLedger,
-      snapshot,
-      reviewState,
-    } = await loadAttentionState(ctx, store, companyId);
-    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, companyId, snapshot, reviewState);
-
-    const shouldPersistLedger = !isAttentionLedger(persistedLedger) || !sameJson(persistedLedger, baseLedger);
-    const shouldPersistSnapshot = !persistedSnapshot || !sameJson(persistedSnapshot, snapshot);
-    const shouldPersistReview = !isAttentionReviewState(persistedReview, companyId) || !sameJson(persistedReview, reviewState);
-
-    if (shouldPersistLedger) await persistLedger(ctx, companyId, baseLedger);
-    if (shouldPersistSnapshot) await persistSnapshot(ctx, companyId, snapshot);
-    if (shouldPersistReview) await persistReviewState(ctx, companyId, reviewState);
-
-    if (!isAttentionLedger(persistedLedger) && persistedSnapshot) {
-      ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", {
-        companyId,
-      });
-    }
-
+    const { snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
+    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState);
     return reconciledSnapshot ?? createEmptySnapshot(companyId);
   });
 
   ctx.data.register("attention-display", async (params) => {
     const companyId = requireCompanyId(params);
-    const {
-      persistedLedger,
-      persistedSnapshot,
-      persistedReview,
-      baseLedger,
-      snapshot,
-      reviewState,
-    } = await loadAttentionState(ctx, store, companyId);
-    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, companyId, snapshot, reviewState);
-
-    const shouldPersistLedger = !isAttentionLedger(persistedLedger) || !sameJson(persistedLedger, baseLedger);
-    const shouldPersistSnapshot = !persistedSnapshot || !sameJson(persistedSnapshot, snapshot);
-    const shouldPersistReview = !isAttentionReviewState(persistedReview, companyId) || !sameJson(persistedReview, reviewState);
-
-    if (shouldPersistLedger) await persistLedger(ctx, companyId, baseLedger);
-    if (shouldPersistSnapshot) await persistSnapshot(ctx, companyId, snapshot);
-    if (shouldPersistReview) await persistReviewState(ctx, companyId, reviewState);
-
-    if (!isAttentionLedger(persistedLedger) && persistedSnapshot) {
-      ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", {
-        companyId,
-      });
-    }
+    const { snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
+    const { displaySnapshot } = await loadDisplaySnapshot(ctx, store, companyId, snapshot, reviewState);
 
     return {
       companyId,
-      snapshot: reconciledSnapshot ?? createEmptySnapshot(companyId),
+      snapshot: displaySnapshot ?? createEmptySnapshot(companyId),
       reviewState,
     } satisfies AttentionDisplayPayload;
   });
 
   ctx.data.register("attention-export", async (params) => {
     const companyId = requireCompanyId(params);
-    const {
-      baseLedger,
-      snapshot,
-      reviewState,
-    } = await loadAttentionState(ctx, store, companyId);
-    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, companyId, snapshot, reviewState);
+    const { baseLedger, snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
+    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState);
+    const approvals = await loadWorkerApprovals(ctx, store, companyId);
+    const displaySnapshot = mergeSnapshotWithApprovals(reconciledSnapshot, companyId, approvals, reviewState);
 
     return {
       companyId,
@@ -271,19 +299,20 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       traces: store.getTraces(companyId),
       snapshot,
       reconciledSnapshot,
+      displaySnapshot,
       review: reviewState,
     } satisfies AttentionExport;
   });
 
   ctx.data.register("attention-traces", async (params) => {
     const companyId = requireCompanyId(params);
-    await loadAttentionState(ctx, store, companyId);
+    await ensureAttentionState(ctx, store, companyId);
     return store.getTraces(companyId);
   });
 
   ctx.data.register("attention-replay-scenario", async (params) => {
     const companyId = requireCompanyId(params);
-    const { baseLedger, snapshot } = await loadAttentionState(ctx, store, companyId);
+    const { baseLedger, snapshot } = await ensureAttentionState(ctx, store, companyId);
 
     return {
       id: `paperclip-attention-${companyId}`,
@@ -318,12 +347,7 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
 
   ctx.data.register("attention-review", async (params) => {
     const companyId = requireCompanyId(params);
-    const { persistedReview, reviewState } = await loadAttentionState(ctx, store, companyId);
-    const review = reviewState;
-
-    if (!isAttentionReviewState(persistedReview, companyId) || !sameJson(persistedReview, review)) {
-      await persistReviewState(ctx, companyId, review);
-    }
-    return review;
+    const { reviewState } = await ensureAttentionState(ctx, store, companyId);
+    return reviewState;
   });
 }

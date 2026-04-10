@@ -8,16 +8,8 @@ import {
 import { mergeStoredFrames } from "./frame-model.js";
 import { approvalBlockingSummary, approvalBlockingWhyNow } from "./attention-language.js";
 import { createEmptySnapshot, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "./types.js";
-
-export type ApprovalRecord = {
-  id: string;
-  companyId: string;
-  type: string;
-  status: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-};
+import type { ApprovalRecord } from "../host/paperclip-approvals.js";
+export type { ApprovalRecord } from "../host/paperclip-approvals.js";
 
 export function approvalTitle(record: ApprovalRecord): string {
   const payload = record.payload ?? {};

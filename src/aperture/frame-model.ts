@@ -36,30 +36,6 @@ function isAmbientExpired(
   return now - updatedAt > AMBIENT_MAX_AGE_MS;
 }
 
-function frameSemanticWeight(frame: StoredAttentionFrame): number {
-  const factors = new Set(frame.provenance?.factors ?? []);
-  let weight = 0;
-
-  if (factors.has("run failed")) weight += 20;
-  if (factors.has("waiting on human")) weight += 16;
-  if (factors.has("needs clarification")) weight += 16;
-  if (factors.has("blocked")) weight += 12;
-  if (factors.has("pending approval")) weight += 12;
-  if (factors.has("paused work")) weight += 6;
-  if (factors.has("comment follow-up")) weight += 4;
-
-  return weight;
-}
-
-export function frameSortScore(frame: StoredAttentionFrame, lane: FrameLane): number {
-  const toneWeight = frame.tone === "critical" ? 40 : frame.tone === "focused" ? 25 : 5;
-  const consequenceWeight = frame.consequence === "high" ? 30 : frame.consequence === "medium" ? 15 : 0;
-  const modeWeight = frame.mode === "approval" ? 12 : frame.mode === "choice" ? 8 : 0;
-  const laneWeight = lane === "now" ? 20 : lane === "next" ? 10 : 0;
-  const budgetWeight = isBudgetOverride(frame) ? 10 : 0;
-  return toneWeight + consequenceWeight + modeWeight + laneWeight + budgetWeight + frameSemanticWeight(frame);
-}
-
 function emptyLaneCounts(): LaneCounts {
   return {
     now: 0,
@@ -67,16 +43,6 @@ function emptyLaneCounts(): LaneCounts {
     ambient: 0,
     total: 0,
   };
-}
-
-function compareCandidates(
-  left: StoredFrameCandidate,
-  right: StoredFrameCandidate,
-  snapshotUpdatedAt: string,
-): number {
-  const byScore = frameSortScore(right.frame, right.lane) - frameSortScore(left.frame, left.lane);
-  if (byScore !== 0) return byScore;
-  return frameUpdatedAt(right.frame, snapshotUpdatedAt).localeCompare(frameUpdatedAt(left.frame, snapshotUpdatedAt));
 }
 
 function frameReviewState(review: AttentionReviewState | null | undefined, taskId: string) {
@@ -154,20 +120,25 @@ export function mergeStoredFrames(
     ...base.ambient.map((frame) => ({ frame, lane: "ambient" as const })),
   ].filter((candidate) => !candidateTaskIds.has(candidate.frame.taskId));
 
-  const filtered = [...baseEntries, ...candidates]
-    .filter((candidate) => !isFrameSuppressed(candidate.frame, base.updatedAt, review));
+  const filtered = [...baseEntries, ...candidates].filter(
+    (candidate) => !isFrameSuppressed(candidate.frame, base.updatedAt, review),
+  );
 
-  const actionable = filtered
-    .filter((candidate) => candidate.lane !== "ambient")
-    .sort((left, right) => compareCandidates(left, right, base.updatedAt));
-  const ambient = filtered
-    .filter((candidate) => candidate.lane === "ambient")
-    .filter((candidate) => !isAmbientExpired(candidate.frame, base.updatedAt, nowIso))
-    .sort((left, right) => compareCandidates(left, right, base.updatedAt));
+  const orderLane = (lane: FrameLane) =>
+    filtered
+      .filter((candidate) => candidate.lane === lane)
+      .sort((left, right) => frameUpdatedAt(right.frame, base.updatedAt).localeCompare(frameUpdatedAt(left.frame, base.updatedAt)));
 
-  const now = actionable.shift()?.frame ?? null;
-  const next = actionable.map((candidate) => candidate.frame);
+  const explicitNow = orderLane("now");
+  const explicitNext = orderLane("next");
+  const ambient = orderLane("ambient").filter(
+    (candidate) => !isAmbientExpired(candidate.frame, base.updatedAt, nowIso),
+  );
+
+  const nowCandidate = explicitNow.shift() ?? explicitNext.shift() ?? null;
+  const next = [...explicitNow, ...explicitNext].map((candidate) => candidate.frame);
   const ambientFrames = ambient.map((candidate) => candidate.frame);
+  const now = nowCandidate?.frame ?? null;
 
   return attachReviewState({
     ...base,

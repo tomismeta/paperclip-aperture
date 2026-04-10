@@ -1,7 +1,9 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
+import { readFocusMetadata } from "../aperture/contracts.js";
 import { mapDecisionToResponse } from "../aperture/response-mapper.js";
 import { createEmptyReviewState, createEmptySnapshot, type AttentionLedgerResponseEntry, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "../aperture/types.js";
+import { submitApprovalDecision } from "../host/paperclip-approvals.js";
 import {
   ATTENTION_REVIEW_STATE_KEY,
   emitAttentionUpdate,
@@ -13,7 +15,14 @@ import {
   trackFocusTelemetry,
 } from "./shared.js";
 
-async function loadReviewState(ctx: PluginContext, companyId: string): Promise<AttentionReviewState> {
+async function loadReviewState(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+): Promise<AttentionReviewState> {
+  const liveReview = store.getReview(companyId);
+  if (liveReview) return liveReview;
+
   const persisted = await ctx.state.get({
     scopeKind: "company",
     scopeId: companyId,
@@ -105,15 +114,19 @@ function focusDimensions(
         ? snapshot?.next.find((candidate) => candidate.taskId === taskId) ?? null
         : snapshot?.ambient.find((candidate) => candidate.taskId === taskId) ?? null;
 
-  return {
+  const dimensions: Record<string, string | number | boolean> = {
     entityType,
     lane,
-    ...(frame?.mode ? { mode: frame.mode } : {}),
-    ...(frame?.source?.kind ? { sourceKind: frame.source.kind } : {}),
-    ...(typeof frame?.metadata?.liveReconciled === "boolean"
-      ? { liveReconciled: frame.metadata.liveReconciled as boolean }
-      : {}),
   };
+
+  if (frame?.mode) dimensions.mode = frame.mode;
+  if (frame?.source?.kind) dimensions.sourceKind = frame.source.kind;
+  if (frame) {
+    const metadata = readFocusMetadata(frame);
+    if (typeof metadata.liveReconciled === "boolean") dimensions.liveReconciled = metadata.liveReconciled;
+  }
+
+  return dimensions;
 }
 
 function approvalIdFromTaskId(taskId: string): string | null {
@@ -137,7 +150,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       apertureResponse: response,
     };
     const currentSnapshot = store.getSnapshot(companyId);
-    const currentReview = await loadReviewState(ctx, companyId);
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], true);
     const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
       const { ledger, snapshot } = store.applyResponse(companyId, ledgerEntry);
@@ -172,9 +185,11 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
 
     const comment = await ctx.issues.createComment(issueId, body, companyId);
     const currentSnapshot = store.getSnapshot(companyId);
-    const currentReview = await loadReviewState(ctx, companyId);
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], false);
     await persistReviewState(ctx, companyId, review);
+    store.setReview(companyId, review);
+    store.invalidateReconciled(companyId);
     emitAttentionUpdate(ctx, {
       companyId,
       reason: "action",
@@ -227,7 +242,16 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       },
       apertureResponse: response,
     };
-    const currentReview = await loadReviewState(ctx, companyId);
+    const approvalId = approvalIdFromTaskId(taskId);
+    if (!approvalId) {
+      throw new Error("Approval responses require a durable approval id.");
+    }
+
+    const config = await ctx.config.get();
+    await submitApprovalDecision(ctx, approvalId, decision as "approve" | "reject" | "request-revision", config);
+    store.invalidateApprovals(companyId);
+
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], true);
     const currentSnapshot = store.getSnapshot(companyId);
     const shouldIngest = snapshotContainsTask(currentSnapshot, taskId);
@@ -264,7 +288,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
             ? "Rejected a Focus approval."
             : "Requested revision on a Focus approval.",
       entityType: "approval",
-      entityId: approvalIdFromTaskId(taskId) ?? taskId,
+      entityId: approvalId,
       metadata: {
         source: "focus",
         decision,
@@ -282,9 +306,10 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     if (taskIds.length === 0) {
       throw new Error("taskIds must include at least one frame task id.");
     }
-    const currentReview = await loadReviewState(ctx, companyId);
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, taskIds);
     await persistReviewState(ctx, companyId, review);
+    store.setReview(companyId, review);
     emitAttentionUpdate(ctx, {
       companyId,
       reason: "action",

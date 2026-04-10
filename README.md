@@ -75,6 +75,8 @@ and agents                             attention now?    actually sees     to th
 - dynamic re-stacking so items can move between `now`, `next`, and `ambient` as new evidence arrives
 - inline issue commenting from the Focus surface when a Paperclip issue supports written response
 - durable acknowledge/suppression behavior backed by plugin state and ledger replay
+- worker-owned display composition that merges live Paperclip approvals into the final Focus snapshot before the UI sees it
+- bounded Core trace export and sparse Focus action telemetry/activity writes for replay and debugging
 - a sidebar entry, page, and dashboard widget
 
 ## Explainability
@@ -101,15 +103,19 @@ This plugin treats Paperclip as the host runtime and UI shell, while embedding [
 
 It is a pure SDK integration: Aperture Core is used as-is inside a self-contained Paperclip plugin, with no changes to Aperture Core or Paperclip core.
 
-For `0.3.x`, the boundary works like this:
+For `0.4.x`, the boundary works like this:
 
-- the plugin worker owns Aperture ingestion, replay, review state, and display composition
+- the plugin worker owns Aperture ingestion, replay, review state, display composition, and reconciliation caching
 - Paperclip remains the system of record for issue and approval writes
-- approval transport still goes through same-origin Paperclip HTTP APIs from the plugin UI because the current plugin SDK does not expose approval read/write clients
+- approval transport now goes through a worker-side Paperclip adapter using the plugin SDK HTTP client, so the browser UI no longer talks to host approval APIs directly
 - the plugin intentionally publishes `ApertureEvent`s today, using a Paperclip-specific semantic mapping layer and ontology, rather than switching fully to `SourceEvent`
-- that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, and shared operator-language generation inside the plugin
+- that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, explicit rule ids for matched issue heuristics, and shared operator-language generation inside the plugin
+- `activity.logged` document events invalidate stale reconciled state so document-backed review blockers refresh promptly without a full browser-side merge layer
+- Focus exports both attention snapshots and bounded Core traces so replay/debug flows can inspect what Core actually saw
 
-The plugin has been validated against [`@tomismeta/aperture-core@0.4.0`](https://www.npmjs.com/package/@tomismeta/aperture-core).
+The plugin has been validated against [`@tomismeta/aperture-core@0.6.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.403.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
+
+If your Paperclip host is not running at the default local address, set the plugin config field `paperclipApiBase` so the worker-side approval adapter can reach the correct host API.
 
 ## Development
 

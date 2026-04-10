@@ -100,6 +100,7 @@ async function handleEvent(
     const entityType = typeof payload.entityType === "string" ? payload.entityType : event.entityType;
 
     if (entityType === "issue" && action && ATTENTION_ACTIVITY_ACTIONS.has(action)) {
+      store.invalidateReconciled(event.companyId);
       emitAttentionUpdate(ctx, {
         companyId: event.companyId,
         reason: "event",
@@ -125,6 +126,10 @@ async function handleEvent(
   const enriched = await enrichIssuePayload(ctx, event);
   const mapped = mapPluginEventToAperture(enriched);
   if (!mapped) return;
+
+  if (enriched.entityType === "approval") {
+    store.invalidateApprovals(enriched.companyId);
+  }
 
   const ledgerEntry: AttentionLedgerEventEntry = {
     kind: "event",

@@ -1,6 +1,7 @@
 import type { SemanticConfidence, SemanticRelationHint } from "@tomismeta/aperture-core/semantic";
 import type { FrameLane } from "./frame-model.js";
 import type { StoredAttentionFrame } from "./types.js";
+import { readFocusMetadata } from "./contracts.js";
 
 export type FrameExplainability = {
   whyNow: string | null;
@@ -11,39 +12,18 @@ export type FrameExplainability = {
   continuity: string | null;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
 }
 
 function readSemanticConfidence(frame: StoredAttentionFrame): SemanticConfidence | null {
-  const semantic = asRecord(frame.metadata?.semantic);
-  const confidence = semantic?.confidence;
+  const confidence = readFocusMetadata(frame).semantic?.confidence;
   return confidence === "low" || confidence === "medium" || confidence === "high" ? confidence : null;
 }
 
 function readSemanticRelationHints(frame: StoredAttentionFrame): SemanticRelationHint[] {
-  const semantic = asRecord(frame.metadata?.semantic);
-  const relationHints = semantic?.relationHints;
-  if (!Array.isArray(relationHints)) return [];
-
-  return relationHints.filter((entry): entry is SemanticRelationHint => {
-    if (typeof entry !== "object" || entry === null) return false;
-    const hint = entry as Record<string, unknown>;
-    return (
-      hint.kind === "same_issue"
-      || hint.kind === "resolves"
-      || hint.kind === "supersedes"
-      || hint.kind === "repeats"
-      || hint.kind === "escalates"
-    );
-  });
+  return readFocusMetadata(frame).semantic?.relationHints ?? [];
 }
 
 function relationHintLabel(hint: SemanticRelationHint): string {
@@ -73,9 +53,9 @@ function laneReason(lane: FrameLane): string {
 }
 
 function continuitySummary(frame: StoredAttentionFrame): string | null {
-  const episode = asRecord(frame.metadata?.episode);
-  const size = typeof episode?.size === "number" ? episode.size : null;
-  const state = typeof episode?.state === "string" ? episode.state.replace(/_/g, " ") : null;
+  const episode = readFocusMetadata(frame).episode;
+  const size = episode?.size ?? null;
+  const state = episode?.state?.replace(/_/g, " ") ?? null;
 
   if (!size || size <= 1) return null;
   if (state) return `Part of a ${state} thread with ${size} related interactions.`;
@@ -83,8 +63,7 @@ function continuitySummary(frame: StoredAttentionFrame): string | null {
 }
 
 function frameSignals(frame: StoredAttentionFrame): string[] {
-  const attention = asRecord(frame.metadata?.attention);
-  const rationale = readStringArray(attention?.rationale);
+  const rationale = readFocusMetadata(frame).attention?.rationale ?? [];
   const factors = readStringArray(frame.provenance?.factors);
   return [...new Set([...(rationale.length > 0 ? rationale : factors), ...factors])];
 }

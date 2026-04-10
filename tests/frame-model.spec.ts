@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateUnreadCounts,
-  frameSortScore,
   isFrameSuppressed,
   mergeStoredFrames,
   type FrameLane,
@@ -90,7 +89,7 @@ describe("frame-model", () => {
     expect(isFrameSuppressed(fresh, "2026-03-19T10:05:00.000Z", review)).toBe(false);
   });
 
-  it("promotes the strongest actionable candidate regardless of original lane", () => {
+  it("preserves the current now frame instead of re-scoring next lane candidates", () => {
     const snapshot = {
       ...createEmptySnapshot("company-1"),
       updatedAt: "2026-03-19T10:00:00.000Z",
@@ -118,8 +117,8 @@ describe("frame-model", () => {
 
     const merged = mergeStoredFrames(snapshot, "company-1", [candidate(failedRun, "next")]);
 
-    expect(merged.now?.taskId).toBe("run:1");
-    expect(frameSortScore(failedRun, "next")).toBeGreaterThan(frameSortScore(snapshot.now!, "now"));
+    expect(merged.now?.taskId).toBe("issue:1");
+    expect(merged.next.map((frame) => frame.taskId)).toContain("run:1");
   });
 
   it("replaces base frames with reconciled candidates that share a task id", () => {

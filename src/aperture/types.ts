@@ -78,6 +78,7 @@ export type AttentionExport = {
   traces: ApertureTrace[];
   snapshot: AttentionSnapshot;
   reconciledSnapshot: AttentionSnapshot;
+  displaySnapshot: AttentionSnapshot;
   review: AttentionReviewState;
 };
 
