@@ -27,6 +27,7 @@ const ATTENTION_ACTIVITY_ACTIONS = new Set([
   "issue.document_updated",
   "issue.document_deleted",
 ]);
+const ISSUE_ENRICH_TTL_MS = 10_000;
 
 function shouldCaptureEvent(
   config: Record<string, unknown>,
@@ -51,6 +52,7 @@ function shouldCaptureEvent(
 
 async function enrichIssuePayload(
   ctx: PluginContext,
+  store: ApertureCompanyStore,
   event: PluginEvent,
 ): Promise<PluginEvent> {
   if (event.entityType !== "issue" || !event.entityId) return event;
@@ -60,8 +62,11 @@ async function enrichIssuePayload(
       : {};
 
   try {
-    const issue = await ctx.issues.get(event.entityId, event.companyId);
+    const cacheKey = `issue:${event.entityId}:detail`;
+    const issue = store.getCachedHostValue<Awaited<ReturnType<typeof ctx.issues.get>>>(event.companyId, cacheKey)
+      ?? await ctx.issues.get(event.entityId, event.companyId);
     if (!issue) return event;
+    store.setCachedHostValue(event.companyId, cacheKey, issue, ISSUE_ENRICH_TTL_MS);
 
     return {
       ...event,
@@ -100,6 +105,13 @@ async function handleEvent(
     const entityType = typeof payload.entityType === "string" ? payload.entityType : event.entityType;
 
     if (entityType === "issue" && action && ATTENTION_ACTIVITY_ACTIONS.has(action)) {
+      store.invalidateHostCache(event.companyId, {
+        keys: event.entityId ? [`issue:${event.entityId}:documents`] : [],
+        prefixes: [
+          "issues:blocked",
+          "issues:in_review",
+        ],
+      });
       emitAttentionUpdate(ctx, {
         companyId: event.companyId,
         reason: "event",
@@ -122,9 +134,27 @@ async function handleEvent(
     return;
   }
 
-  const enriched = await enrichIssuePayload(ctx, event);
+  if (event.entityType === "issue" && event.entityId) {
+    store.invalidateHostCache(event.companyId, {
+      keys: [
+        `issue:${event.entityId}:detail`,
+        `issue:${event.entityId}:comments`,
+      ],
+      prefixes: ["issues:blocked", "issues:in_review"],
+    });
+  } else if (event.entityType === "agent") {
+    store.invalidateHostCache(event.companyId, {
+      keys: ["agents:all"],
+    });
+  }
+
+  const enriched = await enrichIssuePayload(ctx, store, event);
   const mapped = mapPluginEventToAperture(enriched);
   if (!mapped) return;
+
+  if (enriched.entityType === "approval") {
+    store.invalidateApprovals(enriched.companyId);
+  }
 
   const ledgerEntry: AttentionLedgerEventEntry = {
     kind: "event",

@@ -5,11 +5,12 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.4.1",
   displayName: "Paperclip Aperture",
-  description: "The live attention layer for Paperclip, powered by Aperture's deterministic attention engine.",
+  description: "The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.",
   author: "@tomismeta",
   categories: ["automation", "ui"],
   capabilities: [
     "events.subscribe",
+    "http.outbound",
     "agents.read",
     "issues.read",
     "issue.comments.read",
@@ -41,6 +42,12 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Capture Run Failures",
         default: true,
         description: "Turn failed agent runs into high-salience attention events."
+      },
+      paperclipApiBase: {
+        type: "string",
+        title: "Paperclip API Base",
+        default: "http://127.0.0.1:3100",
+        description: "Base URL the worker should use for Paperclip approval reads and writes when the plugin SDK lacks a first-class approval client."
       }
     }
   },

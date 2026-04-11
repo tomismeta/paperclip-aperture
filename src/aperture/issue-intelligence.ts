@@ -1,5 +1,6 @@
 import type { Issue, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import type { SemanticConfidence, SemanticRelationHint } from "@tomismeta/aperture-core/semantic";
+import { createTaskId } from "./task-ref.js";
 
 export type LatestComment = {
   body: string;
@@ -17,17 +18,19 @@ export type IssueIntentKey =
   | "dependency_reference";
 
 type IssueIntentDetector = {
+  id: string;
   key: IssueIntentKey;
   pattern: RegExp;
+  description: string;
 };
 
 const ISSUE_INTENT_DETECTORS: IssueIntentDetector[] = [
-  { key: "clarification", pattern: /clarif|question|need info|need more|waiting on|feedback/i },
-  { key: "resolution", pattern: /final direction|lock these in|use these|not a request for iteration|proceed to|proceed\.|unblock|ready to proceed/i },
-  { key: "share_with_board", pattern: /share .* with the board/i },
-  { key: "confirmation", pattern: /please review and confirm|review and confirm|confirm the direction|confirm whether/i },
-  { key: "board_instruction", pattern: /(board should either .*?)(?:[.!?]|$)/i },
-  { key: "dependency_reference", pattern: /\b[A-Z]+-\d+\b/ },
+  { id: "clarification.generic", key: "clarification", pattern: /clarif|question|need info|need more|waiting on|feedback/i, description: "Signals that the thread is blocked on clarification or more information." },
+  { id: "resolution.direction", key: "resolution", pattern: /final direction|lock these in|use these|not a request for iteration|you can proceed|ready to proceed|unblocked|resolved/i, description: "Signals that the latest guidance appears to resolve or unblock the thread." },
+  { id: "artifact.share_with_board", key: "share_with_board", pattern: /share .* with the board/i, description: "Signals that a review artifact still needs to be shared with the board." },
+  { id: "confirmation.explicit", key: "confirmation", pattern: /please review and confirm|review and confirm|confirm the direction|confirm whether|\bconfirm\b/i, description: "Signals an explicit confirmation step before work can continue." },
+  { id: "board_instruction.explicit", key: "board_instruction", pattern: /(board should either .*?)(?:[.!?]|$)/i, description: "Signals explicit board-facing instructions in the latest operator text." },
+  { id: "dependency.reference", key: "dependency_reference", pattern: /\b[A-Z]+-\d+\b/, description: "Signals a downstream dependency reference in the thread." },
 ];
 
 export type IssueIntentAnalysis = {
@@ -36,6 +39,7 @@ export type IssueIntentAnalysis = {
   ownerKind: "agent" | "human" | null;
   blockingTarget: string | null;
   intents: Set<IssueIntentKey>;
+  matchedRuleIds: string[];
   explicitBoardInstruction: string | null;
   semanticConfidence: SemanticConfidence | null;
   relationHints: SemanticRelationHint[];
@@ -93,17 +97,27 @@ function escapeRegex(value: string): string {
 }
 
 export function issueRelationTarget(issueId: string): string {
-  return `issue:${issueId}`;
+  return createTaskId("issue", issueId);
 }
 
-function detectIssueIntents(text: string): Set<IssueIntentKey> {
+function detectIssueIntents(text: string): {
+  intents: Set<IssueIntentKey>;
+  matchedRuleIds: string[];
+} {
   const intents = new Set<IssueIntentKey>();
+  const matchedRuleIds: string[] = [];
 
   for (const detector of ISSUE_INTENT_DETECTORS) {
-    if (detector.pattern.test(text)) intents.add(detector.key);
+    if (detector.pattern.test(text)) {
+      intents.add(detector.key);
+      matchedRuleIds.push(detector.id);
+    }
   }
 
-  return intents;
+  return {
+    intents,
+    matchedRuleIds,
+  };
 }
 
 function blockingTargetForText(text: string, identifier?: string | null): string | null {
@@ -166,13 +180,14 @@ export function analyzeIssueTextSemantics(input: {
   text: string;
   identifier?: string | null;
   issueTarget?: string | null;
-}): Pick<IssueIntentAnalysis, "text" | "blockingTarget" | "intents" | "explicitBoardInstruction" | "semanticConfidence" | "relationHints"> {
-  const intents = detectIssueIntents(input.text);
+}): Pick<IssueIntentAnalysis, "text" | "blockingTarget" | "intents" | "matchedRuleIds" | "explicitBoardInstruction" | "semanticConfidence" | "relationHints"> {
+  const { intents, matchedRuleIds } = detectIssueIntents(input.text);
 
   return {
     text: input.text,
     blockingTarget: blockingTargetForText(input.text, input.identifier),
     intents,
+    matchedRuleIds,
     explicitBoardInstruction: explicitBoardInstructionForText(input.text),
     semanticConfidence: semanticConfidenceForIntents(intents),
     relationHints: relationHintsForIntents(intents, input.issueTarget),
@@ -290,13 +305,13 @@ export function issueRecommendedMove(
     return "Share the memo with the board so review can continue.";
   }
 
+  if (analysis.explicitBoardInstruction) return truncate(analysis.explicitBoardInstruction, 140);
+
   if (hasIntent(analysis, "confirmation")) {
     return analysis.blockingTarget
       ? `Confirm the direction so ${analysis.blockingTarget} can proceed.`
       : "Review the draft and confirm whether work should proceed.";
   }
-
-  if (analysis.explicitBoardInstruction) return truncate(analysis.explicitBoardInstruction, 140);
 
   if (/leave a comment/i.test(normalized)) {
     return "Leave a comment with enough context for work to resume.";

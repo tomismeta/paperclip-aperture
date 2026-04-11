@@ -1,6 +1,7 @@
 import type { Agent, Issue, IssueComment, PluginContext, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import type { SemanticConfidence } from "@tomismeta/aperture-core/semantic";
 import type { AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "./types.js";
+import type { ApertureCompanyStore } from "./core-store.js";
 import {
   agentStatusItem,
   agentTitleItem,
@@ -31,10 +32,15 @@ import {
   type LatestComment,
   truncate,
 } from "./issue-intelligence.js";
+import { createInteractionId, createTaskId } from "./task-ref.js";
 
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 
 const COMMENT_LOOKUP_CONCURRENCY = 6;
+const ISSUE_LIST_TTL_MS = 15_000;
+const ISSUE_COMMENTS_TTL_MS = 15_000;
+const ISSUE_DOCUMENTS_TTL_MS = 15_000;
+const AGENT_LIST_TTL_MS = 15_000;
 
 function semanticMetadata(
   confidence: SemanticConfidence | null,
@@ -149,13 +155,14 @@ function issueFrame(
   const move = issueRecommendedMove(issue, analysis, documentSignal);
   const target = analysis.blockingTarget;
   const semantic = semanticMetadata(analysis.semanticConfidence, analysis.relationHints);
+  const taskId = createTaskId("issue", issue.id);
 
   return {
     lane,
     frame: {
       id: `reconcile:issue:${issue.id}:${updatedAt}`,
-      taskId: `issue:${issue.id}`,
-      interactionId: `issue:${issue.id}:${issue.status}`,
+      taskId,
+      interactionId: createInteractionId(taskId, issue.status),
       source: {
         id: "paperclip:issue",
         kind: "paperclip",
@@ -183,18 +190,24 @@ function issueFrame(
         createdAt: toIsoString(issue.createdAt) ?? updatedAt,
         updatedAt,
       },
-      metadata: {
-        entityType: "issue",
-        issueStatus: issue.status,
-        issuePriority: issue.priority,
-        liveReconciled: true,
-        activityPath: comment ? "activity" : undefined,
-        attention: {
-          rationale: provenance.factors ?? [],
+        metadata: {
+          entityType: "issue",
+          issueStatus: issue.status,
+          issuePriority: issue.priority,
+          liveReconciled: true,
+          activityPath: comment ? "activity" : undefined,
+          attention: {
+            rationale: provenance.factors ?? [],
+          },
+          issueIntelligence: {
+            matchedRuleIds: analysis.matchedRuleIds,
+            owner: analysis.owner,
+            ownerKind: analysis.ownerKind,
+            blockingTarget: analysis.blockingTarget,
+          },
+          ...(semantic ? { semantic } : {}),
         },
-        ...(semantic ? { semantic } : {}),
       },
-    },
   };
 }
 
@@ -220,13 +233,14 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
 
   const updatedAt = toIsoString(agent.updatedAt) ?? toIsoString(agent.createdAt) ?? new Date(0).toISOString();
   const provenance = agentProvenance(agent);
+  const taskId = createTaskId("agent", agent.id);
 
   return {
     lane,
     frame: {
       id: `reconcile:agent:${agent.id}:${updatedAt}`,
-      taskId: `agent:${agent.id}`,
-      interactionId: `agent:${agent.id}:${agent.status}`,
+      taskId,
+      interactionId: createInteractionId(taskId, agent.status),
       source: {
         id: "paperclip:agent",
         kind: "paperclip",
@@ -261,11 +275,11 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
         createdAt: toIsoString(agent.createdAt) ?? updatedAt,
         updatedAt,
       },
-      metadata: {
-        entityType: "agent",
-        agentStatus: agent.status,
-        pauseReason: agent.pauseReason,
-        liveReconciled: true,
+        metadata: {
+          entityType: "agent",
+          agentStatus: agent.status,
+          pauseReason: agent.pauseReason,
+          liveReconciled: true,
         activityPath: agent.status === "error" ? "activity" : undefined,
         attention: {
           rationale: provenance.factors ?? [],
@@ -289,6 +303,22 @@ async function safeListComments(ctx: PluginContext, issue: Issue): Promise<Lates
     });
     return null;
   }
+}
+
+async function cachedRead<T>(
+  store: ApertureCompanyStore,
+  companyId: string,
+  key: string,
+  ttlMs: number,
+  options: { fresh?: boolean } | undefined,
+  loader: () => Promise<T>,
+): Promise<T> {
+  if (!options?.fresh) {
+    const cached = store.getCachedHostValue<T>(companyId, key);
+    if (cached !== null) return cached;
+  }
+  const value = await loader();
+  return store.setCachedHostValue(companyId, key, value, ttlMs);
 }
 
 async function safeListDocuments(
@@ -329,25 +359,67 @@ async function mapWithConcurrency<TInput, TOutput>(
   return results;
 }
 
-async function loadIssueCandidates(ctx: PluginContext, companyId: string): Promise<StoredFrameCandidate[]> {
+async function loadIssuesForStatus(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+  status: "blocked" | "in_review",
+  options?: { freshHostData?: boolean },
+): Promise<Issue[]> {
+  return cachedRead(store, companyId, `issues:${status}`, ISSUE_LIST_TTL_MS, { fresh: options?.freshHostData }, async () => (
+    await ctx.issues.list({ companyId, status, limit: 25 })
+  ));
+}
+
+async function loadAllAgents(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+  options?: { freshHostData?: boolean },
+): Promise<Agent[]> {
+  return cachedRead(store, companyId, "agents:all", AGENT_LIST_TTL_MS, { fresh: options?.freshHostData }, async () => (
+    await ctx.agents.list({ companyId, limit: 100 })
+  ));
+}
+
+async function loadIssueCandidates(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+  allAgents: Agent[],
+  options?: { freshHostData?: boolean },
+): Promise<StoredFrameCandidate[]> {
   const [blocked, inReview] = await Promise.all([
-    ctx.issues.list({ companyId, status: "blocked", limit: 25 }),
-    ctx.issues.list({ companyId, status: "in_review", limit: 25 }),
+    loadIssuesForStatus(ctx, store, companyId, "blocked", options),
+    loadIssuesForStatus(ctx, store, companyId, "in_review", options),
   ]);
 
   const issues = [...blocked, ...inReview];
-  const [comments, documents, allAgents] = await Promise.all([
+  const [comments, documents] = await Promise.all([
     mapWithConcurrency(
       issues,
       COMMENT_LOOKUP_CONCURRENCY,
-      (issue) => safeListComments(ctx, issue),
+      (issue) => cachedRead(
+        store,
+        companyId,
+        `issue:${issue.id}:comments`,
+        ISSUE_COMMENTS_TTL_MS,
+        { fresh: options?.freshHostData },
+        () => safeListComments(ctx, issue),
+      ),
     ),
     mapWithConcurrency(
       issues,
       COMMENT_LOOKUP_CONCURRENCY,
-      (issue) => safeListDocuments(ctx, issue),
+      (issue) => cachedRead(
+        store,
+        companyId,
+        `issue:${issue.id}:documents`,
+        ISSUE_DOCUMENTS_TTL_MS,
+        { fresh: options?.freshHostData },
+        () => safeListDocuments(ctx, issue),
+      ),
     ),
-    ctx.agents.list({ companyId, limit: 100 }),
   ]);
   const directory: IssueActorDirectory = {
     agentNames: allAgents.map((agent) => agent.name).filter((name): name is string => typeof name === "string" && name.trim().length > 0),
@@ -358,35 +430,43 @@ async function loadIssueCandidates(ctx: PluginContext, companyId: string): Promi
     .filter((candidate): candidate is StoredFrameCandidate => candidate !== null);
 }
 
-async function loadAgentCandidates(ctx: PluginContext, companyId: string): Promise<StoredFrameCandidate[]> {
-  const [pendingApproval, errored, paused] = await Promise.all([
-    ctx.agents.list({ companyId, status: "pending_approval", limit: 25 }),
-    ctx.agents.list({ companyId, status: "error", limit: 25 }),
-    ctx.agents.list({ companyId, status: "paused", limit: 25 }),
-  ]);
-
-  return [...pendingApproval, ...errored, ...paused]
+function loadAgentCandidates(allAgents: Agent[]): StoredFrameCandidate[] {
+  return allAgents
+    .filter((agent) => agent.status === "pending_approval" || agent.status === "error" || agent.status === "paused")
     .map((agent) => agentFrame(agent))
     .filter((candidate): candidate is StoredFrameCandidate => candidate !== null);
 }
 
-export async function reconcileAttentionSnapshot(
+export async function loadReconciledCandidates(
   ctx: PluginContext,
+  store: ApertureCompanyStore,
   companyId: string,
-  snapshot: AttentionSnapshot,
-  review: AttentionReviewState | null,
   config: Record<string, unknown>,
-): Promise<AttentionSnapshot> {
+  options?: { freshHostData?: boolean },
+): Promise<StoredFrameCandidate[]> {
+  const allAgents = await loadAllAgents(ctx, store, companyId, options);
   const issueCandidatesPromise = config.captureIssueLifecycle === false
     ? Promise.resolve<StoredFrameCandidate[]>([])
-    : loadIssueCandidates(ctx, companyId);
+    : loadIssueCandidates(ctx, store, companyId, allAgents, options);
 
-  const agentCandidatesPromise = loadAgentCandidates(ctx, companyId);
+  const agentCandidatesPromise = Promise.resolve(loadAgentCandidates(allAgents));
 
   const [issueCandidates, agentCandidates] = await Promise.all([
     issueCandidatesPromise,
     agentCandidatesPromise,
   ]);
 
-  return mergeStoredFrames(snapshot, companyId, [...issueCandidates, ...agentCandidates], review);
+  return [...issueCandidates, ...agentCandidates];
+}
+
+export async function reconcileAttentionSnapshot(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+  snapshot: AttentionSnapshot,
+  review: AttentionReviewState | null,
+  config: Record<string, unknown>,
+): Promise<AttentionSnapshot> {
+  const candidates = await loadReconciledCandidates(ctx, store, companyId, config);
+  return mergeStoredFrames(snapshot, companyId, candidates, review);
 }

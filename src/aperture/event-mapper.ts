@@ -1,6 +1,7 @@
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import type { ApertureEvent, SourceEvent, SourceRef, TaskStatus } from "@tomismeta/aperture-core";
 import { interpretSourceEvent } from "@tomismeta/aperture-core/semantic";
+import { createInteractionId, createTaskId } from "./task-ref.js";
 import {
   approvalBlockingSummary,
   approvalBlockingWhyNow,
@@ -62,7 +63,7 @@ function humanizeApprovalType(value: string | undefined): string | undefined {
 function makeTaskId(event: MappablePluginEvent): string {
   const entityType = event.entityType ?? "event";
   const entityId = event.entityId ?? event.eventId;
-  return `${entityType}:${entityId}`;
+  return createTaskId(entityType, entityId);
 }
 
 function makeSource(event: MappablePluginEvent): SourceRef {
@@ -256,7 +257,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           id: `${event.eventId}:approval`,
           type: "human.input.requested",
           taskId,
-          interactionId: `${taskId}:approval`,
+          interactionId: createInteractionId(taskId, "approval"),
           timestamp: event.occurredAt,
           source,
           toolFamily: "paperclip",
@@ -272,7 +273,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         id: `${event.eventId}:approval`,
         type: "human.input.requested",
         taskId,
-        interactionId: `${taskId}:approval`,
+        interactionId: createInteractionId(taskId, "approval"),
         timestamp: event.occurredAt,
         source,
         toolFamily: "paperclip",
@@ -457,7 +458,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         id: `${event.eventId}:run-failed`,
         type: "human.input.requested",
         taskId,
-        interactionId: `${taskId}:run-failed`,
+        interactionId: createInteractionId(taskId, "run-failed"),
         timestamp: event.occurredAt,
         source,
         toolFamily: "paperclip",
@@ -471,7 +472,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           id: `${event.eventId}:run-failed`,
           type: "human.input.requested",
           taskId,
-          interactionId: `${taskId}:run-failed`,
+          interactionId: createInteractionId(taskId, "run-failed"),
           timestamp: event.occurredAt,
           source,
           toolFamily: "paperclip",
@@ -518,7 +519,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           id: `${event.eventId}:status-pending-approval`,
           type: "human.input.requested",
           taskId,
-          interactionId: `${taskId}:pending-approval`,
+          interactionId: createInteractionId(taskId, "pending-approval"),
           timestamp: event.occurredAt,
           source,
           toolFamily: "paperclip",
@@ -532,7 +533,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
             id: `${event.eventId}:status-pending-approval`,
             type: "human.input.requested",
             taskId,
-            interactionId: `${taskId}:pending-approval`,
+            interactionId: createInteractionId(taskId, "pending-approval"),
             timestamp: event.occurredAt,
             source,
             toolFamily: "paperclip",

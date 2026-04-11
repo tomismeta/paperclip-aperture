@@ -2,9 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { Agent, Issue, IssueComment, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import manifest from "../src/manifest.js";
-import type { AttentionExport, AttentionReplayScenario, AttentionReviewState, AttentionSnapshot } from "../src/aperture/types.js";
+import type {
+  AttentionCoreDiagnostics,
+  AttentionExport,
+  AttentionOverlayDiagnostics,
+  AttentionReplayScenario,
+  AttentionReviewState,
+  AttentionSnapshot,
+} from "../src/aperture/types.js";
+import type { ApprovalRecord } from "../src/aperture/approval-frames.js";
 import plugin from "../src/worker.js";
 import {
+  ATTENTION_STATE_KEY,
   ATTENTION_LEDGER_STATE_KEY,
   ATTENTION_SNAPSHOT_STATE_KEY,
 } from "../src/handlers/shared.js";
@@ -111,6 +120,45 @@ function createIssueDocumentSummary(overrides: Partial<IssueDocumentSummary> = {
   };
 }
 
+function createApprovalRecord(overrides: Partial<ApprovalRecord> = {}): ApprovalRecord {
+  return {
+    id: "approval-1",
+    companyId: "company-live",
+    type: "approve_ceo_strategy",
+    status: "pending",
+    payload: {
+      title: "Approve launch cutover",
+      summary: "Launch cutover is waiting on a human decision.",
+    },
+    createdAt: "2026-03-19T10:00:00.000Z",
+    updatedAt: "2026-03-19T10:05:00.000Z",
+    ...overrides,
+  };
+}
+
+function mockApprovalApi(
+  harness: ReturnType<typeof createTestHarness>,
+  approvals: Array<Record<string, unknown>> = [],
+) {
+  harness.ctx.http.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.includes("/api/companies/") && url.includes("/approvals?status=pending")) {
+      return new Response(JSON.stringify(approvals), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (
+      url.includes("/api/approvals/")
+      && init?.method === "POST"
+    ) {
+      return new Response("", { status: 200 });
+    }
+
+    throw new Error(`Unhandled approval API request in test: ${url}`);
+  });
+}
+
 describe("paperclip aperture", () => {
   it("maps approval events into attention state and clears them on acknowledgement", async () => {
     const harness = createTestHarness({ manifest });
@@ -149,6 +197,149 @@ describe("paperclip aperture", () => {
         }),
       }),
     ]));
+  });
+
+  it("exposes live core diagnostics for the active company session", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-core-diagnostics", entityId: "approval-1", entityType: "approval" },
+    );
+
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-core-diagnostics",
+    });
+    expect(diagnostics.eventCount).toBe(1);
+    expect(diagnostics.currentNowTask?.taskId).toBe("approval:approval-1");
+    expect(diagnostics.memoryProfile.sessionCount).toBeGreaterThan(0);
+    expect(diagnostics.globalSignalSummary.lifetimeSignals).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.surfaceCapabilities.topology.supportsAmbient).toBe(true);
+    expect(diagnostics.surfaceCapabilities.responses.supportsTextResponse).toBe(true);
+
+    const exported = await harness.getData<AttentionExport>("attention-export", {
+      companyId: "company-core-diagnostics",
+    });
+    expect(exported.coreDiagnostics.currentNowTask?.taskId).toBe("approval:approval-1");
+    expect(exported.coreDiagnostics.eventCount).toBe(1);
+  });
+
+  it("records operator engagement for the active now item", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-focus-hold", entityId: "approval-1", entityType: "approval" },
+    );
+
+    const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-focus-hold" });
+    const response = await harness.performAction<{ ok: boolean; snapshot: AttentionSnapshot }>("engage-focus", {
+      companyId: "company-focus-hold",
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
+      durationMs: 1000,
+      reason: "show_context",
+    });
+
+    expect(response.ok).toBe(true);
+    expect(response.snapshot.now?.title).toBe("Approve pricing memo");
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-focus-hold",
+    });
+    expect(diagnostics.currentNowTask?.signalSummary.counts.viewed).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.currentNowTask?.signalSummary.counts.contextExpanded).toBeGreaterThanOrEqual(1);
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "focus_engaged",
+        dimensions: expect.objectContaining({
+          surface: "focus",
+          actionKind: "engage",
+          reason: "show_context",
+        }),
+      }),
+    ]));
+  });
+
+  it("records viewed signals for the active now item through the worker action", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-viewed-signal", entityId: "approval-1", entityType: "approval" },
+    );
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-viewed-signal" });
+    await harness.performAction("mark-attention-viewed", {
+      companyId: "company-viewed-signal",
+      taskId: snapshot.now?.taskId,
+      interactionId: snapshot.now?.interactionId,
+      surface: "focus",
+    });
+
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-viewed-signal",
+    });
+    expect(diagnostics.currentNowTask?.signalSummary.counts.viewed).toBeGreaterThanOrEqual(1);
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "frame_viewed",
+        dimensions: expect.objectContaining({
+          surface: "focus",
+          entityType: "approval",
+        }),
+      }),
+    ]));
+  });
+
+  it("tracks operator presence through the plugin bridge", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-presence", entityId: "approval-1", entityType: "approval" },
+    );
+
+    await harness.performAction("set-focus-presence", {
+      companyId: "company-presence",
+      presence: "absent",
+    });
+    let diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-presence",
+    });
+    expect(diagnostics.operatorPresence).toBe("absent");
+
+    await harness.performAction("set-focus-presence", {
+      companyId: "company-presence",
+      presence: "present",
+    });
+    diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-presence",
+    });
+    expect(diagnostics.operatorPresence).toBe("present");
   });
 
   it("captures run failures as high-salience updates", async () => {
@@ -259,6 +450,7 @@ describe("paperclip aperture", () => {
   it("records approval responses through the plugin action path and clears the frame after restart", async () => {
     const firstHarness = createTestHarness({ manifest });
     await plugin.definition.setup(firstHarness.ctx);
+    mockApprovalApi(firstHarness);
 
     await firstHarness.emit(
       "approval.created",
@@ -295,26 +487,17 @@ describe("paperclip aperture", () => {
       }),
     ]));
 
-    const persistedLedger = firstHarness.getState({
+    const persistedState = firstHarness.getState({
       scopeKind: "company",
       scopeId: "company-approval-response",
-      stateKey: ATTENTION_LEDGER_STATE_KEY,
-    });
-    const persistedSnapshot = firstHarness.getState({
-      scopeKind: "company",
-      scopeId: "company-approval-response",
-      stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
+      stateKey: ATTENTION_STATE_KEY,
     });
 
     const secondHarness = createTestHarness({ manifest });
     await plugin.definition.setup(secondHarness.ctx);
     await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-approval-response", stateKey: ATTENTION_LEDGER_STATE_KEY },
-      persistedLedger,
-    );
-    await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-approval-response", stateKey: ATTENTION_SNAPSHOT_STATE_KEY },
-      persistedSnapshot,
+      { scopeKind: "company", scopeId: "company-approval-response", stateKey: ATTENTION_STATE_KEY },
+      persistedState,
     );
 
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-approval-response" });
@@ -325,6 +508,7 @@ describe("paperclip aperture", () => {
   it("persists approval suppression even when the approval frame only exists in the UI layer", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness);
 
     await harness.performAction("record-approval-response", {
       companyId: "company-approval-ui-only",
@@ -355,26 +539,17 @@ describe("paperclip aperture", () => {
     );
 
     const original = await firstHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-replay" });
-    const persistedLedger = firstHarness.getState({
+    const persistedState = firstHarness.getState({
       scopeKind: "company",
       scopeId: "company-replay",
-      stateKey: ATTENTION_LEDGER_STATE_KEY,
-    });
-    const persistedSnapshot = firstHarness.getState({
-      scopeKind: "company",
-      scopeId: "company-replay",
-      stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
+      stateKey: ATTENTION_STATE_KEY,
     });
 
     const secondHarness = createTestHarness({ manifest });
     await plugin.definition.setup(secondHarness.ctx);
     await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-replay", stateKey: ATTENTION_LEDGER_STATE_KEY },
-      persistedLedger,
-    );
-    await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-replay", stateKey: ATTENTION_SNAPSHOT_STATE_KEY },
-      persistedSnapshot,
+      { scopeKind: "company", scopeId: "company-replay", stateKey: ATTENTION_STATE_KEY },
+      persistedState,
     );
 
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-replay" });
@@ -407,19 +582,20 @@ describe("paperclip aperture", () => {
       interactionId: initial.now?.interactionId,
     });
 
-    const persistedLedger = firstHarness.getState({
+    const persistedState = firstHarness.getState({
       scopeKind: "company",
       scopeId: "company-review-replay",
-      stateKey: ATTENTION_LEDGER_STATE_KEY,
+      stateKey: ATTENTION_STATE_KEY,
     });
-    const persistedSnapshot = firstHarness.getState({
-      scopeKind: "company",
-      scopeId: "company-review-replay",
-      stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
-    });
+    const persistedLedger = (persistedState as { payload?: { ledger?: unknown } })?.payload?.ledger;
+    const persistedSnapshot = (persistedState as { payload?: { snapshot?: unknown } })?.payload?.snapshot;
 
     const secondHarness = createTestHarness({ manifest });
     await plugin.definition.setup(secondHarness.ctx);
+    await secondHarness.ctx.state.set(
+      { scopeKind: "company", scopeId: "company-review-replay", stateKey: ATTENTION_STATE_KEY },
+      persistedState,
+    );
     await secondHarness.ctx.state.set(
       { scopeKind: "company", scopeId: "company-review-replay", stateKey: ATTENTION_LEDGER_STATE_KEY },
       persistedLedger,
@@ -435,6 +611,44 @@ describe("paperclip aperture", () => {
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-review-replay" });
     expect(rebuilt.now).toBeNull();
     expect(rebuilt.counts.total).toBe(0);
+  });
+
+  it("hydrates from the legacy split state keys for backwards compatibility", async () => {
+    const firstHarness = createTestHarness({ manifest });
+    await plugin.definition.setup(firstHarness.ctx);
+
+    await firstHarness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve migration-safe replay",
+        summary: "A legacy replay path is waiting on review.",
+      },
+      { companyId: "company-legacy-envelope", entityId: "approval-legacy-1", entityType: "approval" },
+    );
+
+    const persistedState = firstHarness.getState({
+      scopeKind: "company",
+      scopeId: "company-legacy-envelope",
+      stateKey: ATTENTION_STATE_KEY,
+    }) as { payload?: { ledger?: unknown; snapshot?: unknown } };
+    const persistedLedger = persistedState.payload?.ledger;
+    const persistedSnapshot = persistedState.payload?.snapshot;
+
+    const secondHarness = createTestHarness({ manifest });
+    await plugin.definition.setup(secondHarness.ctx);
+    await secondHarness.ctx.state.set(
+      { scopeKind: "company", scopeId: "company-legacy-envelope", stateKey: ATTENTION_LEDGER_STATE_KEY },
+      persistedLedger,
+    );
+    await secondHarness.ctx.state.set(
+      { scopeKind: "company", scopeId: "company-legacy-envelope", stateKey: ATTENTION_SNAPSHOT_STATE_KEY },
+      persistedSnapshot,
+    );
+
+    const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-legacy-envelope" });
+    expect(rebuilt.now?.title).toBe("Approve migration-safe replay");
+    expect(rebuilt.counts.now).toBe(1);
   });
 
   it("respects the issue lifecycle capture toggle", async () => {
@@ -839,6 +1053,47 @@ describe("paperclip aperture", () => {
     ]));
   });
 
+  it("restores the prior focus state and marks health when persistence fails", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    expect(initial.now?.taskId).toBe("issue:issue-1");
+
+    const originalSet = harness.ctx.state.set.bind(harness.ctx.state);
+    vi.spyOn(harness.ctx.state, "set").mockImplementationOnce(async (descriptor, value) => {
+      if (descriptor.stateKey === ATTENTION_STATE_KEY) {
+        throw new Error("state persistence unavailable");
+      }
+      return originalSet(descriptor, value);
+    });
+
+    await expect(harness.performAction("acknowledge-frame", {
+      companyId: "company-live",
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
+    })).rejects.toThrow("state persistence unavailable");
+
+    const restored = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    expect(restored.now?.taskId).toBe("issue:issue-1");
+
+    const failedHealth = await harness.getData<{ faultedCompanies: number }>("health", {});
+    expect(failedHealth.faultedCompanies).toBe(1);
+
+    await harness.performAction("acknowledge-frame", {
+      companyId: "company-live",
+      taskId: restored.now?.taskId,
+      interactionId: restored.now?.interactionId,
+    });
+
+    const recoveredHealth = await harness.getData<{ faultedCompanies: number }>("health", {});
+    expect(recoveredHealth.faultedCompanies).toBe(0);
+  });
+
   it("posts issue comments back to Paperclip from the frame action", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
@@ -882,6 +1137,59 @@ describe("paperclip aperture", () => {
     const updated = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
     expect(updated.now?.taskId).toBe("issue:issue-1");
     expect(updated.now?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("Board can cover outreach directly");
+  });
+
+  it("retries telemetry writes before giving up", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    const trackSpy = vi.spyOn(harness.ctx.telemetry, "track")
+      .mockRejectedValueOnce(new Error("telemetry unavailable"));
+
+    await harness.performAction("acknowledge-frame", {
+      companyId: "company-live",
+      taskId: snapshot.now?.taskId,
+      interactionId: snapshot.now?.interactionId,
+    });
+
+    expect(trackSpy).toHaveBeenCalledTimes(2);
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "frame_acknowledged",
+      }),
+    ]));
+  });
+
+  it("retries activity writes before giving up", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    const activitySpy = vi.spyOn(harness.ctx.activity, "log")
+      .mockRejectedValueOnce(new Error("activity unavailable"));
+
+    await harness.performAction("comment-on-issue", {
+      companyId: "company-live",
+      taskId: snapshot.now?.taskId,
+      issueId: "issue-1",
+      body: "Board can cover outreach directly this week while tooling is sorted out.",
+    });
+
+    expect(activitySpy).toHaveBeenCalledTimes(2);
+    expect(harness.activity).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: "Posted an issue comment from Focus.",
+      }),
+    ]));
   });
 
   it("surfaces actor routing and a recommended move when the issue text is explicit", async () => {
@@ -981,6 +1289,8 @@ describe("paperclip aperture", () => {
     expect(beforeResponse.responseEntries).toHaveLength(0);
     expect(beforeResponse.traces.length).toBeGreaterThan(0);
     expect(beforeResponse.reconciledSnapshot.now?.title).toBe("Approve launch cutover");
+    expect(beforeResponse.displaySnapshot.now?.title).toBe("Approve launch cutover");
+    expect(beforeResponse.overlayDiagnostics.summary.coreFrames).toBeGreaterThanOrEqual(1);
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-export",
@@ -994,6 +1304,7 @@ describe("paperclip aperture", () => {
     expect(afterResponse.responseEntries).toHaveLength(1);
     expect(afterResponse.traces.length).toBeGreaterThanOrEqual(beforeResponse.traces.length);
     expect(afterResponse.snapshot.now).toBeNull();
+    expect(afterResponse.displaySnapshot.now).toBeNull();
   });
 
   it("exposes recent core traces for debugging exports", async () => {
@@ -1013,6 +1324,52 @@ describe("paperclip aperture", () => {
     const traces = await harness.getData<unknown[]>("attention-traces", { companyId: "company-traces" });
     expect(Array.isArray(traces)).toBe(true);
     expect(traces.length).toBeGreaterThan(0);
+  });
+
+  it("bounds export and replay windows while exposing totals", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    for (let index = 1; index <= 5; index += 1) {
+      await harness.emit(
+        "approval.created",
+        {
+          type: "approve_ceo_strategy",
+          title: `Approve launch cutover ${index}`,
+          summary: `Launch cutover ${index} is waiting on a human decision.`,
+        },
+        { companyId: "company-windowed-export", entityId: `approval-window-${index}`, entityType: "approval" },
+      );
+    }
+
+    const exported = await harness.getData<AttentionExport>("attention-export", {
+      companyId: "company-windowed-export",
+      limit: 3,
+      traceLimit: 2,
+    });
+    expect(exported.ledger).toHaveLength(3);
+    expect(exported.window).toEqual(expect.objectContaining({
+      entryLimit: 3,
+      traceLimit: 2,
+      totalLedgerEntries: 5,
+      returnedLedgerEntries: 3,
+      returnedTraces: 2,
+      hasMoreBefore: true,
+    }));
+    expect(exported.ledger[0]?.source.entityId).toBe("approval-window-3");
+    expect(exported.ledger[2]?.source.entityId).toBe("approval-window-5");
+
+    const replay = await harness.getData<AttentionReplayScenario>("attention-replay-scenario", {
+      companyId: "company-windowed-export",
+      limit: 2,
+    });
+    expect(replay.steps).toHaveLength(2);
+    expect(replay.window).toEqual(expect.objectContaining({
+      entryLimit: 2,
+      totalLedgerEntries: 5,
+      returnedSteps: 2,
+      hasMoreBefore: true,
+    }));
   });
 
   it("reacts to issue document activity events for refresh invalidation", async () => {
@@ -1039,6 +1396,204 @@ describe("paperclip aperture", () => {
         entityType: "issue",
       },
     });
+  });
+
+  it("builds the final display snapshot in the worker by merging pending approvals", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, [createApprovalRecord({ companyId: "company-display" })]);
+
+    const display = await harness.getData<{ snapshot: AttentionSnapshot }>("attention-display", {
+      companyId: "company-display",
+    });
+
+    expect(display.snapshot.now?.taskId).toBe("approval:approval-1");
+    expect(display.snapshot.now?.title).toBe("Approve launch cutover");
+  });
+
+  it("surfaces approval overlay diagnostics for worker-merged display frames", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, [createApprovalRecord({ companyId: "company-overlay-display" })]);
+
+    const diagnostics = await harness.getData<AttentionOverlayDiagnostics>("attention-overlay-diagnostics", {
+      companyId: "company-overlay-display",
+    });
+    expect(diagnostics.summary.introducedByDisplayOverlay).toBe(1);
+    expect(diagnostics.summary.approvalOverlayFrames).toBe(1);
+    expect(diagnostics.frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: "approval:approval-1",
+        canonicalSource: "display_overlay",
+        overlayKind: "approval_overlay",
+        lanePath: {
+          core: null,
+          reconciled: null,
+          display: "now",
+        },
+        changes: expect.arrayContaining([
+          expect.objectContaining({
+            stage: "display",
+            kind: "introduced",
+            toLane: "now",
+          }),
+        ]),
+      }),
+    ]));
+  });
+
+  it("surfaces reconciled host-policy diagnostics for live issue candidates", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, []);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const diagnostics = await harness.getData<AttentionOverlayDiagnostics>("attention-overlay-diagnostics", {
+      companyId: "company-live",
+    });
+    expect(diagnostics.summary.introducedByReconciliation).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: "issue:issue-1",
+        canonicalSource: "reconciled",
+        liveReconciled: true,
+        lanePath: {
+          core: null,
+          reconciled: "now",
+          display: "now",
+        },
+        changes: expect.arrayContaining([
+          expect.objectContaining({
+            stage: "reconciled",
+            kind: "introduced",
+            toLane: "now",
+          }),
+        ]),
+      }),
+    ]));
+  });
+
+  it("surfaces lane moves when host reconciliation demotes a core item behind a newer blocker", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, []);
+
+    harness.seed({
+      issues: [
+        createIssue({
+          companyId: "company-lane-move",
+          status: "in_review",
+          priority: "high",
+        }),
+      ],
+      issueComments: [
+        createIssueComment({
+          companyId: "company-lane-move",
+          issueId: "issue-1",
+          body: "Please review and confirm the direction before CAM-10 can proceed.",
+        }),
+      ],
+      agents: [
+        createAgent({
+          id: "agent-2",
+          companyId: "company-lane-move",
+          name: "Ops Agent",
+          title: "Ops Agent",
+          status: "error",
+          updatedAt: new Date("2026-03-19T10:20:00.000Z"),
+        }),
+      ],
+    });
+
+    await harness.emit(
+      "issue.updated",
+      {
+        identifier: "CAM-9",
+        issueTitle: "Blocked rollout follow-up",
+        summary: "Need clarification from the operator before resuming the rollout.",
+        status: "blocked",
+      },
+      { companyId: "company-lane-move", entityId: "issue-1", entityType: "issue" },
+    );
+
+    const diagnostics = await harness.getData<AttentionOverlayDiagnostics>("attention-overlay-diagnostics", {
+      companyId: "company-lane-move",
+    });
+
+    expect(diagnostics.summary.movedByReconciliation).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: "issue:issue-1",
+        canonicalSource: "core",
+        lanePath: {
+          core: "now",
+          reconciled: "next",
+          display: "next",
+        },
+        changes: expect.arrayContaining([
+          expect.objectContaining({
+            stage: "reconciled",
+            kind: "moved",
+            fromLane: "now",
+            toLane: "next",
+          }),
+        ]),
+      }),
+    ]));
+  });
+
+  it("reuses cached display reconciliation until an invalidating activity event arrives", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, []);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const originalListIssues = harness.ctx.issues.list.bind(harness.ctx.issues);
+    const originalListComments = harness.ctx.issues.listComments.bind(harness.ctx.issues);
+    const originalListDocuments = harness.ctx.issues.documents.list.bind(harness.ctx.issues.documents);
+
+    const listIssues = vi.fn(originalListIssues);
+    const listComments = vi.fn(originalListComments);
+    const listDocuments = vi.fn(originalListDocuments);
+
+    harness.ctx.issues.list = listIssues;
+    harness.ctx.issues.listComments = listComments;
+    harness.ctx.issues.documents.list = listDocuments;
+
+    await harness.getData("attention-display", { companyId: "company-live" });
+    const issueCallsAfterFirstRead = listIssues.mock.calls.length;
+    const commentCallsAfterFirstRead = listComments.mock.calls.length;
+    const documentCallsAfterFirstRead = listDocuments.mock.calls.length;
+    const approvalCallsAfterFirstRead = (harness.ctx.http.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await harness.getData("attention-display", { companyId: "company-live" });
+
+    expect(listIssues.mock.calls.length).toBe(issueCallsAfterFirstRead);
+    expect(listComments.mock.calls.length).toBe(commentCallsAfterFirstRead);
+    expect(listDocuments.mock.calls.length).toBe(documentCallsAfterFirstRead);
+    expect((harness.ctx.http.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(approvalCallsAfterFirstRead);
+
+    await harness.emit(
+      "activity.logged",
+      {
+        action: "issue.document_created",
+        entityType: "issue",
+        entityId: "issue-1",
+      },
+      { companyId: "company-live", entityId: "issue-1", entityType: "issue" },
+    );
+
+    await harness.getData("attention-display", { companyId: "company-live" });
+
+    expect(listIssues.mock.calls.length).toBeGreaterThan(issueCallsAfterFirstRead);
+    expect(listComments.mock.calls.length).toBe(commentCallsAfterFirstRead);
+    expect(listDocuments.mock.calls.length).toBeGreaterThan(documentCallsAfterFirstRead);
   });
 
   it("exports a lab-compatible replay scenario from the attention ledger", async () => {

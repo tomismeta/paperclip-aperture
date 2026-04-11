@@ -1,19 +1,26 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import {
+  createPersistedAttentionState,
+  normalizePersistedAttentionState,
+  type PersistedAttentionState,
+} from "../aperture/persisted-state.js";
+import {
   createEmptyReviewState,
   createEmptySnapshot,
-  type AttentionLedger,
   type AttentionReviewState,
   type AttentionSnapshot,
 } from "../aperture/types.js";
 
+export const ATTENTION_STATE_KEY = "attention-state";
+// Legacy split keys remain readable for migration, but new writes go through ATTENTION_STATE_KEY.
 export const ATTENTION_SNAPSHOT_STATE_KEY = "attention-snapshot";
 export const ATTENTION_LEDGER_STATE_KEY = "attention-ledger";
 export const ATTENTION_REVIEW_STATE_KEY = "attention-review";
 export const ATTENTION_UPDATES_STREAM = "attention-updates";
 
 const companyMutationQueue = new Map<string, Promise<void>>();
+const BEST_EFFORT_RETRY_DELAYS_MS = [10, 30] as const;
 
 export type AttentionUpdateEvent = {
   companyId: string;
@@ -49,7 +56,7 @@ export async function persistSnapshot(
 export async function persistLedger(
   ctx: PluginContext,
   companyId: string,
-  ledger: AttentionLedger,
+  ledger: PersistedAttentionState["ledger"],
 ): Promise<void> {
   await ctx.state.set(
     { scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_LEDGER_STATE_KEY },
@@ -68,6 +75,33 @@ export async function persistReviewState(
   );
 }
 
+export async function loadPersistedAttentionState(
+  ctx: PluginContext,
+  companyId: string,
+): Promise<PersistedAttentionState | null> {
+  const value = await ctx.state.get({
+    scopeKind: "company",
+    scopeId: companyId,
+    stateKey: ATTENTION_STATE_KEY,
+  });
+  return normalizePersistedAttentionState(companyId, value);
+}
+
+export async function persistAttentionState(
+  ctx: PluginContext,
+  companyId: string,
+  state: {
+    ledger: PersistedAttentionState["ledger"];
+    snapshot: AttentionSnapshot;
+    review: AttentionReviewState;
+  },
+): Promise<void> {
+  await ctx.state.set(
+    { scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_STATE_KEY },
+    createPersistedAttentionState(companyId, state),
+  );
+}
+
 export function emitAttentionUpdate(
   ctx: PluginContext,
   event: AttentionUpdateEvent,
@@ -76,22 +110,45 @@ export function emitAttentionUpdate(
   ctx.streams.emit(ATTENTION_UPDATES_STREAM, event);
 }
 
+async function retryBestEffort(
+  run: () => Promise<void>,
+  onFailure: (error: unknown, attempt: number, final: boolean) => void,
+): Promise<void> {
+  for (let attempt = 0; attempt <= BEST_EFFORT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await run();
+      return;
+    } catch (error) {
+      const final = attempt === BEST_EFFORT_RETRY_DELAYS_MS.length;
+      onFailure(error, attempt + 1, final);
+      if (final) return;
+      await new Promise((resolve) => {
+        setTimeout(resolve, BEST_EFFORT_RETRY_DELAYS_MS[attempt]);
+      });
+    }
+  }
+}
+
 export async function trackFocusTelemetry(
   ctx: PluginContext,
   eventName: string,
   dimensions?: Record<string, string | number | boolean>,
 ): Promise<void> {
-  try {
-    await ctx.telemetry.track(eventName, {
-      surface: "focus",
-      ...(dimensions ?? {}),
-    });
-  } catch (error) {
-    ctx.logger.warn("Failed to emit Focus telemetry", {
-      eventName,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await retryBestEffort(
+    async () => {
+      await ctx.telemetry.track(eventName, {
+        surface: "focus",
+        ...(dimensions ?? {}),
+      });
+    },
+    (error, attempt, final) => {
+      ctx.logger.warn(final ? "Failed to emit Focus telemetry after retries" : "Retrying Focus telemetry after failure", {
+        eventName,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 export async function logFocusActivity(
@@ -104,26 +161,30 @@ export async function logFocusActivity(
     metadata?: Record<string, unknown>;
   },
 ): Promise<void> {
-  try {
-    await ctx.activity.log({
-      companyId: entry.companyId,
-      message: entry.message,
-      ...(entry.entityType ? { entityType: entry.entityType } : {}),
-      ...(entry.entityId ? { entityId: entry.entityId } : {}),
-      ...(entry.metadata ? { metadata: entry.metadata } : {}),
-    });
-  } catch (error) {
-    ctx.logger.warn("Failed to write Focus activity log entry", {
-      message: entry.message,
-      entityType: entry.entityType,
-      entityId: entry.entityId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await retryBestEffort(
+    async () => {
+      await ctx.activity.log({
+        companyId: entry.companyId,
+        message: entry.message,
+        ...(entry.entityType ? { entityType: entry.entityType } : {}),
+        ...(entry.entityId ? { entityId: entry.entityId } : {}),
+        ...(entry.metadata ? { metadata: entry.metadata } : {}),
+      });
+    },
+    (error, attempt, final) => {
+      ctx.logger.warn(final ? "Failed to write Focus activity log entry after retries" : "Retrying Focus activity log entry after failure", {
+        message: entry.message,
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 type PersistedAttentionMutation = {
-  ledger: AttentionLedger;
+  ledger: PersistedAttentionState["ledger"];
   snapshot: AttentionSnapshot;
   review?: AttentionReviewState;
 };
@@ -136,60 +197,51 @@ export async function runAttentionMutation<T extends PersistedAttentionMutation>
 ): Promise<T> {
   const prior = companyMutationQueue.get(companyId) ?? Promise.resolve();
   let release!: () => void;
-  const current = new Promise<void>((resolve) => {
+  const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  companyMutationQueue.set(companyId, prior.catch(() => undefined).then(() => current));
+  const tail = prior.catch(() => undefined).then(() => gate);
+  companyMutationQueue.set(companyId, tail);
 
   await prior.catch(() => undefined);
 
+  const persistedState = await loadPersistedAttentionState(ctx, companyId);
   const previousLedger = store.getLedger(companyId);
   const previousSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
-  const previousReview = await ctx.state.get({
-    scopeKind: "company",
-    scopeId: companyId,
-    stateKey: ATTENTION_REVIEW_STATE_KEY,
-  });
-  let persistStarted = false;
+  const previousReview = store.getReview(companyId)
+    ?? persistedState?.review
+    ?? createEmptyReviewState(companyId);
+  const fallbackState = persistedState ?? {
+    companyId,
+    ledger: previousLedger,
+    snapshot: previousSnapshot,
+    review: previousReview,
+  };
 
   try {
     const result = await mutation();
-    persistStarted = true;
-    await persistLedger(ctx, companyId, result.ledger);
+
     try {
-      await persistSnapshot(ctx, companyId, result.snapshot);
-      if (result.review) await persistReviewState(ctx, companyId, result.review);
-    } catch (error) {
-      ctx.logger.warn("Persisted attention ledger without a matching snapshot update", {
-        companyId,
-        error: error instanceof Error ? error.message : String(error),
+      if (result.review) store.setReview(companyId, result.review);
+      await persistAttentionState(ctx, companyId, {
+        ledger: result.ledger,
+        snapshot: result.snapshot,
+        review: result.review ?? store.getReview(companyId) ?? previousReview,
       });
+      store.markPersistenceHealthy(companyId);
+      return result;
+    } catch (error) {
+      store.restore(companyId, fallbackState);
+      store.markPersistenceFault(companyId, error instanceof Error ? error.message : String(error));
       throw error;
     }
-    return result;
   } catch (error) {
-    if (persistStarted) {
-      try {
-        await persistLedger(ctx, companyId, previousLedger);
-        await persistSnapshot(ctx, companyId, previousSnapshot);
-        await persistReviewState(
-          ctx,
-          companyId,
-          previousReview && typeof previousReview === "object"
-            ? previousReview as AttentionReviewState
-            : createEmptyReviewState(companyId),
-        );
-      } catch (rollbackError) {
-        ctx.logger.error("Failed to roll back attention state after mutation persistence error", {
-          companyId,
-          error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-        });
-      }
-    }
-
-    store.rebuildFromLedger(companyId, previousLedger);
+    store.restore(companyId, fallbackState);
     throw error;
   } finally {
     release();
+    if (companyMutationQueue.get(companyId) === tail) {
+      companyMutationQueue.delete(companyId);
+    }
   }
 }

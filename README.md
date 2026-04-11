@@ -2,7 +2,7 @@
 
 # Paperclip Aperture
 
-**The live attention layer for Paperclip, powered by Aperture's deterministic attention engine.**
+**The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.**
 
 [![paperclip-aperture npm](https://img.shields.io/npm/v/%40tomismeta%2Fpaperclip-aperture?label=paperclip-aperture&color=2563eb)](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
 [![aperture github](https://img.shields.io/badge/aperture-tomismeta%2Faperture-18181b)](https://github.com/tomismeta/aperture)
@@ -13,7 +13,7 @@
 <p></p>
 </div>
 
-Paperclip Aperture adds a Focus surface to Paperclip that deterministically ranks approvals, issue activity, and other human-facing events into `now`, `next`, and `ambient`.
+Paperclip Aperture adds a Focus surface to Paperclip that turns approvals, issue activity, and other human-facing signals into `now`, `next`, and `ambient`.
 
 It is designed as a live attention layer, not an inbox clone:
 
@@ -66,16 +66,27 @@ and agents                             attention now?    actually sees     to th
 - a Focus surface inside Paperclip
 - ranked `now`, `next`, and `ambient` attention lanes
 - embedded explainability in the Focus UI, including `Why now`, `Why next`, confidence, signals, thread context, and related activity
+- bounded focus hold while the operator is actively working the current `now` item, so `Show context` and inline commenting do not immediately lose the thread beneath them
 - approval handling, including budget-specific approval semantics
 - issue-aware operator language such as `review required`, `blocked`, and targeted recommended moves
 - agent-aware routing that distinguishes known company agents from human/operator roles when issue text references them
-- a plugin-local deterministic semantic mapping layer that interprets Paperclip issue, approval, and agent signals before publishing them into Aperture Core
+- a plugin-local semantic mapping and policy layer that interprets Paperclip issue, approval, and agent signals before composing the final Focus view
 - richer semantic continuity hints on mapped issue events, including `supersedes` and `resolves` relationships where Paperclip-specific intent is clear
 - document-aware review interpretation for memo/spec-backed issues so Focus can tell the difference between `review is blocked on the artifact` and `the artifact is attached, monitor instead`
 - dynamic re-stacking so items can move between `now`, `next`, and `ambient` as new evidence arrives
 - inline issue commenting from the Focus surface when a Paperclip issue supports written response
 - durable acknowledge/suppression behavior backed by plugin state and ledger replay
+- worker-owned display composition that merges live Paperclip approvals into the final Focus snapshot before the UI sees it
+- bounded Core trace export and sparse Focus action telemetry/activity writes for replay and debugging
+- live Core diagnostics export, including signal summaries, memory profile snapshots, and current-session attention state for offline analysis
+- worker-bridged operator signals for Focus page presence, active-item viewing, and context expansion so Aperture Core sees real interaction evidence instead of the plugin faking a second attention model
+- overlay diagnostics export that compares `core -> reconciled -> display` so the plugin's host-policy contribution is inspectable without confusing it for Core judgment
 - a sidebar entry, page, and dashboard widget
+- worker-side host read caching for issue/comment/document/agent reconciliation, with fresh summary/export reads when you need the latest host truth
+- bounded per-company Core sessions with health reporting so the worker does not grow without limit during normal multi-company use
+- a corpus-backed `issue-intelligence` regression check in CI so heuristic edits stay inspectable
+- rollback-safe local mutations that restore the last durable attention state if persistence fails
+- versioned persisted attention envelopes with an explicit migration path for older schemas
 
 ## Explainability
 
@@ -99,32 +110,38 @@ The intent is not to expose every internal scoring detail. It is to help an oper
 
 This plugin treats Paperclip as the host runtime and UI shell, while embedding [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) through the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
-It is a pure SDK integration: Aperture Core is used as-is inside a self-contained Paperclip plugin, with no changes to Aperture Core or Paperclip core.
+It is an SDK-first integration with explicit plugin-side host policy. Aperture Core handles continuity, replay, and global attention mechanics; the plugin adds Paperclip-specific candidate generation, approval overlays, and operator language where the host can know more than Core alone.
 
-For `0.3.x`, the boundary works like this:
+For `0.4.x`, the boundary works like this:
 
-- the plugin worker owns Aperture ingestion, replay, review state, and display composition
+- the plugin worker owns Aperture ingestion, replay, review state, display composition, reconciliation caching, and Paperclip-native policy overlays
+- the final Focus view is therefore Core-backed but not Core-only today: the plugin still owns some Paperclip-specific candidate and lane policy where the host has facts Core cannot infer by itself
 - Paperclip remains the system of record for issue and approval writes
-- approval transport still goes through same-origin Paperclip HTTP APIs from the plugin UI because the current plugin SDK does not expose approval read/write clients
+- approval transport now goes through a worker-side Paperclip adapter using the plugin SDK HTTP client, so the browser UI no longer talks to host approval APIs directly
 - the plugin intentionally publishes `ApertureEvent`s today, using a Paperclip-specific semantic mapping layer and ontology, rather than switching fully to `SourceEvent`
-- that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, and shared operator-language generation inside the plugin
+- that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, explicit rule ids for matched issue heuristics, and shared operator-language generation inside the plugin
+- `activity.logged` document events invalidate stale reconciled state so document-backed review blockers refresh promptly without a full browser-side merge layer
+- Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
 
-The plugin has been validated against [`@tomismeta/aperture-core@0.4.0`](https://www.npmjs.com/package/@tomismeta/aperture-core).
+The plugin has been validated against [`@tomismeta/aperture-core@0.6.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.403.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
+
+If your Paperclip host is not running at the default local address, set the plugin config field `paperclipApiBase` so the worker-side approval adapter can reach the correct host API.
 
 ## Development
 
 ```bash
 pnpm install
-pnpm typecheck
-pnpm test
-pnpm build
+pnpm verify
 ```
 
 Before releasing, run:
 
 ```bash
+pnpm clean
 pnpm release:check
 ```
+
+`pnpm verify` runs typecheck, tests, the issue-intelligence eval corpus, a production build, and bundle-size checks.
 
 For a live local Paperclip smoke test, start Paperclip first:
 
@@ -156,6 +173,8 @@ Then open `http://127.0.0.1:3100/APE/aperture` and verify:
 
 - Plugin on npm: [`@tomismeta/paperclip-aperture`](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
 - Roadmap and releasing: [docs/ROADMAP.md](./docs/ROADMAP.md)
+- Architecture remediation note: [docs/AUDIT-REMEDIATION-2026-04.md](./docs/AUDIT-REMEDIATION-2026-04.md)
+- Contribution guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
 - Aperture Core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
 - Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)

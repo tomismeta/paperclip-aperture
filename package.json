@@ -3,7 +3,7 @@
   "version": "0.4.1",
   "type": "module",
   "private": false,
-  "description": "The live attention layer for Paperclip, powered by Aperture's deterministic attention engine.",
+  "description": "The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tomismeta/paperclip-aperture.git"
@@ -19,14 +19,18 @@
   ],
   "scripts": {
     "build": "tsx ./esbuild.config.ts",
-    "build:rollup": "pnpm exec rollup --config ./rollup.config.ts --configPlugin @rollup/plugin-typescript",
+    "check:bundle-size": "tsx ./scripts/check-bundle-size.ts",
+    "clean": "find . -name .DS_Store -delete && rm -rf dist tmp *.tgz",
     "dev": "tsx ./esbuild.config.ts --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
     "demo:record": "tsx ./scripts/demo/capture.ts",
+    "eval:issue-intelligence": "tsx ./scripts/eval-issue-intelligence.ts",
+    "pack:check": "npm pack --dry-run",
     "prepack": "pnpm build",
-    "release:check": "pnpm typecheck && pnpm test && pnpm build && npm publish --dry-run",
+    "release:check": "pnpm verify && pnpm pack:check",
     "test": "vitest run --config ./vitest.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify": "pnpm typecheck && pnpm test && pnpm eval:issue-intelligence && pnpm build && pnpm check:bundle-size"
   },
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
@@ -51,11 +55,9 @@
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "2026.403.0",
-    "@tomismeta/aperture-core": "^0.6.0"
+    "@tomismeta/aperture-core": "0.6.0"
   },
   "devDependencies": {
-    "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-typescript": "^12.1.2",
     "@types/node": "^24.6.0",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
@@ -63,7 +65,6 @@
     "playwright": "^1.58.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "rollup": "^4.38.0",
     "tslib": "^2.8.1",
     "tsx": "^4.20.5",
     "typescript": "^5.7.3",

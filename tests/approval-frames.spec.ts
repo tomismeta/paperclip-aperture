@@ -99,7 +99,7 @@ describe("approval-frames", () => {
       createEmptyReviewState("company-1"),
     );
 
-    expect(merged.now?.taskId).toBe("approval:approval-2");
-    expect(merged.next.map((frame) => frame.taskId)).toContain("issue:1");
+    expect(merged.now?.taskId).toBe("issue:1");
+    expect(merged.next.map((frame) => frame.taskId)).toContain("approval:approval-2");
   });
 });

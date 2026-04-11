@@ -1,34 +1,30 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
+import { readFocusMetadata } from "../aperture/contracts.js";
 import { mapDecisionToResponse } from "../aperture/response-mapper.js";
+import { parseTaskId, taskIdMatchesKind, taskKind } from "../aperture/task-ref.js";
 import { createEmptyReviewState, createEmptySnapshot, type AttentionLedgerResponseEntry, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "../aperture/types.js";
+import { submitApprovalDecision } from "../host/paperclip-approvals.js";
 import {
-  ATTENTION_REVIEW_STATE_KEY,
   emitAttentionUpdate,
+  loadPersistedAttentionState,
   logFocusActivity,
-  persistReviewState,
   requireCompanyId,
   requireStringParam,
   runAttentionMutation,
   trackFocusTelemetry,
 } from "./shared.js";
 
-async function loadReviewState(ctx: PluginContext, companyId: string): Promise<AttentionReviewState> {
-  const persisted = await ctx.state.get({
-    scopeKind: "company",
-    scopeId: companyId,
-    stateKey: ATTENTION_REVIEW_STATE_KEY,
-  });
+async function loadReviewState(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+): Promise<AttentionReviewState> {
+  const liveReview = store.getReview(companyId);
+  if (liveReview) return liveReview;
 
-  if (
-    persisted
-    && typeof persisted === "object"
-    && (persisted as AttentionReviewState).companyId === companyId
-    && typeof (persisted as AttentionReviewState).updatedAt === "string"
-    && typeof (persisted as AttentionReviewState).frames === "object"
-  ) {
-    return persisted as AttentionReviewState;
-  }
+  const persisted = await loadPersistedAttentionState(ctx, companyId);
+  if (persisted?.review) return persisted.review;
 
   return createEmptyReviewState(companyId);
 }
@@ -70,17 +66,7 @@ function snapshotContainsTask(snapshot: AttentionSnapshot | null, taskId: string
 }
 
 function entityTypeFromTaskId(taskId: string): string {
-  const separatorIndex = taskId.indexOf(":");
-  return separatorIndex > 0 ? taskId.slice(0, separatorIndex) : "unknown";
-}
-
-function defaultCounts(): AttentionSnapshot["counts"] {
-  return {
-    now: 0,
-    next: 0,
-    ambient: 0,
-    total: 0,
-  };
+  return taskKind(taskId) ?? "unknown";
 }
 
 function laneForTask(snapshot: AttentionSnapshot | null, taskId: string): "now" | "next" | "ambient" | "ui_only" {
@@ -105,22 +91,107 @@ function focusDimensions(
         ? snapshot?.next.find((candidate) => candidate.taskId === taskId) ?? null
         : snapshot?.ambient.find((candidate) => candidate.taskId === taskId) ?? null;
 
-  return {
+  const dimensions: Record<string, string | number | boolean> = {
     entityType,
     lane,
-    ...(frame?.mode ? { mode: frame.mode } : {}),
-    ...(frame?.source?.kind ? { sourceKind: frame.source.kind } : {}),
-    ...(typeof frame?.metadata?.liveReconciled === "boolean"
-      ? { liveReconciled: frame.metadata.liveReconciled as boolean }
-      : {}),
   };
+
+  if (frame?.mode) dimensions.mode = frame.mode;
+  if (frame?.source?.kind) dimensions.sourceKind = frame.source.kind;
+  if (frame) {
+    const metadata = readFocusMetadata(frame);
+    if (typeof metadata.liveReconciled === "boolean") dimensions.liveReconciled = metadata.liveReconciled;
+  }
+
+  return dimensions;
 }
 
 function approvalIdFromTaskId(taskId: string): string | null {
-  return taskId.startsWith("approval:") ? taskId.slice("approval:".length) : null;
+  const taskRef = parseTaskId(taskId);
+  return taskRef?.kind === "approval" ? taskRef.id : null;
 }
 
 export function registerActionHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
+  ctx.actions.register("set-focus-presence", async (params) => {
+    const companyId = requireCompanyId(params);
+    const requestedPresence = requireStringParam(params, "presence");
+    const presence = requestedPresence === "absent" ? "absent" : "present";
+    return {
+      ok: true,
+      operatorPresence: store.setOperatorPresence(companyId, presence),
+    };
+  });
+
+  ctx.actions.register("mark-attention-viewed", async (params) => {
+    const companyId = requireCompanyId(params);
+    const taskId = requireStringParam(params, "taskId");
+    const interactionId = requireStringParam(params, "interactionId");
+    const surface = typeof params.surface === "string" && params.surface.trim().length > 0
+      ? params.surface.trim()
+      : "focus";
+
+    const currentSnapshot = store.getSnapshot(companyId);
+    const { snapshot, changed } = store.markViewed(companyId, taskId, interactionId, { surface });
+
+    if (changed) {
+      emitAttentionUpdate(ctx, {
+        companyId,
+        reason: "action",
+        eventType: "plugin.local.viewed",
+        updatedAt: snapshot.updatedAt,
+        counts: snapshot.counts,
+      });
+    }
+
+    await trackFocusTelemetry(ctx, "frame_viewed", {
+      ...focusDimensions(currentSnapshot, taskId),
+      surface,
+    });
+
+    return { ok: true, snapshot, changed };
+  });
+
+  ctx.actions.register("engage-focus", async (params) => {
+    const companyId = requireCompanyId(params);
+    const taskId = requireStringParam(params, "taskId");
+    const interactionId = requireStringParam(params, "interactionId");
+    const durationMs = typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
+      ? Math.max(25, Math.floor(params.durationMs))
+      : undefined;
+    const reason = typeof params.reason === "string" && params.reason.trim().length > 0
+      ? params.reason.trim()
+      : "operator_interaction";
+
+    const currentSnapshot = store.getSnapshot(companyId);
+    const { snapshot, changed } = store.engage(companyId, taskId, interactionId, { durationMs });
+    store.markViewed(companyId, taskId, interactionId, { surface: "focus" });
+    if (reason === "show_context" || reason === "comment_compose") {
+      store.markContextExpanded(companyId, taskId, interactionId, {
+        surface: "focus",
+        section: reason === "show_context" ? "now_context" : "comment_compose",
+      });
+    }
+
+    if (changed) {
+      emitAttentionUpdate(ctx, {
+        companyId,
+        reason: "action",
+        eventType: "plugin.local.engage",
+        updatedAt: snapshot.updatedAt,
+        counts: snapshot.counts,
+      });
+    }
+
+    await trackFocusTelemetry(ctx, "focus_engaged", {
+      ...focusDimensions(currentSnapshot, taskId),
+      actionKind: "engage",
+      reason,
+      ...(durationMs ? { durationMs } : {}),
+    });
+
+    return { ok: true, snapshot, changed };
+  });
+
   ctx.actions.register("acknowledge-frame", async (params) => {
     const companyId = requireCompanyId(params);
     const taskId = requireStringParam(params, "taskId");
@@ -137,7 +208,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       apertureResponse: response,
     };
     const currentSnapshot = store.getSnapshot(companyId);
-    const currentReview = await loadReviewState(ctx, companyId);
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], true);
     const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
       const { ledger, snapshot } = store.applyResponse(companyId, ledgerEntry);
@@ -162,25 +233,39 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     const issueId = requireStringParam(params, "issueId");
     const body = requireStringParam(params, "body").trim();
 
-    if (!taskId.startsWith("issue:")) {
+    const taskRef = parseTaskId(taskId);
+    if (!taskRef || taskRef.kind !== "issue") {
       throw new Error("Comments can only be posted on issue-backed frames.");
     }
-    const expectedIssueId = taskId.slice("issue:".length);
-    if (expectedIssueId !== issueId) {
+    if (taskRef.id !== issueId) {
       throw new Error("Issue comment target does not match the selected frame.");
     }
 
     const comment = await ctx.issues.createComment(issueId, body, companyId);
     const currentSnapshot = store.getSnapshot(companyId);
-    const currentReview = await loadReviewState(ctx, companyId);
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], false);
-    await persistReviewState(ctx, companyId, review);
+    const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
+      store.invalidateHostCache(companyId, {
+        keys: [
+          `issue:${issueId}:detail`,
+          `issue:${issueId}:comments`,
+        ],
+        prefixes: ["issues:blocked", "issues:in_review"],
+      });
+      store.setReview(companyId, review);
+      return {
+        ledger: store.getLedger(companyId),
+        snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+        review,
+      };
+    });
     emitAttentionUpdate(ctx, {
       companyId,
       reason: "action",
       eventType: "plugin.local.comment",
-      updatedAt: review.updatedAt,
-      counts: store.getSnapshot(companyId)?.counts ?? defaultCounts(),
+      updatedAt: snapshot.updatedAt,
+      counts: snapshot.counts,
     });
     await trackFocusTelemetry(ctx, "issue_comment_submitted", {
       ...focusDimensions(currentSnapshot, taskId),
@@ -205,7 +290,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     const interactionId = requireStringParam(params, "interactionId");
     const decision = requireStringParam(params, "decision");
 
-    if (taskId.startsWith("approval:") === false) {
+    if (!taskIdMatchesKind(taskId, "approval")) {
       throw new Error("Approval responses can only be recorded for approval-backed frames.");
     }
     if (!["approve", "reject", "request-revision"].includes(decision)) {
@@ -227,7 +312,16 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       },
       apertureResponse: response,
     };
-    const currentReview = await loadReviewState(ctx, companyId);
+    const approvalId = approvalIdFromTaskId(taskId);
+    if (!approvalId) {
+      throw new Error("Approval responses require a durable approval id.");
+    }
+
+    const config = await ctx.config.get();
+    await submitApprovalDecision(ctx, approvalId, decision as "approve" | "reject" | "request-revision", config);
+    store.invalidateApprovals(companyId);
+
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], true);
     const currentSnapshot = store.getSnapshot(companyId);
     const shouldIngest = snapshotContainsTask(currentSnapshot, taskId);
@@ -264,7 +358,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
             ? "Rejected a Focus approval."
             : "Requested revision on a Focus approval.",
       entityType: "approval",
-      entityId: approvalIdFromTaskId(taskId) ?? taskId,
+      entityId: approvalId,
       metadata: {
         source: "focus",
         decision,
@@ -282,19 +376,26 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     if (taskIds.length === 0) {
       throw new Error("taskIds must include at least one frame task id.");
     }
-    const currentReview = await loadReviewState(ctx, companyId);
+    const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, taskIds);
-    await persistReviewState(ctx, companyId, review);
+    const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
+      store.setReview(companyId, review);
+      return {
+        ledger: store.getLedger(companyId),
+        snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+        review,
+      };
+    });
     emitAttentionUpdate(ctx, {
       companyId,
       reason: "action",
       eventType: "plugin.local.seen",
-      updatedAt: review.updatedAt,
-      counts: store.getSnapshot(companyId)?.counts ?? defaultCounts(),
+      updatedAt: snapshot.updatedAt,
+      counts: snapshot.counts,
     });
     await trackFocusTelemetry(ctx, "attention_seen_marked", {
       frameCount: taskIds.length,
     });
-    return { ok: true, review };
+    return { ok: true, review, snapshot };
   });
 }

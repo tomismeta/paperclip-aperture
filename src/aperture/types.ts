@@ -1,4 +1,11 @@
-import type { ApertureEvent, AttentionFrame, AttentionResponse, AttentionView } from "@tomismeta/aperture-core";
+import type {
+  ApertureCore,
+  ApertureEvent,
+  AttentionFrame,
+  AttentionResponse,
+  AttentionSurfaceCapabilities,
+  AttentionView,
+} from "@tomismeta/aperture-core";
 import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
 
 export type StoredAttentionFrame = Pick<
@@ -69,6 +76,68 @@ export type AttentionLedgerResponseEntry = {
 export type AttentionLedgerEntry = AttentionLedgerEventEntry | AttentionLedgerResponseEntry;
 export type AttentionLedger = AttentionLedgerEntry[];
 
+export type AttentionCoreDiagnostics = {
+  eventCount: number;
+  persistence: {
+    state: "healthy" | "faulted";
+    updatedAt?: string;
+    lastError?: string;
+  };
+  surfaceCapabilities: AttentionSurfaceCapabilities;
+  operatorPresence: ReturnType<ApertureCore["getOperatorPresence"]>;
+  globalSignalSummary: ReturnType<ApertureCore["getSignalSummary"]>;
+  globalAttentionState: ReturnType<ApertureCore["getAttentionState"]>;
+  memoryProfile: ReturnType<ApertureCore["snapshotMemoryProfile"]>;
+  currentNowTask: null | {
+    taskId: string;
+    interactionId: string;
+    signalSummary: ReturnType<ApertureCore["getSignalSummary"]>;
+    attentionState: ReturnType<ApertureCore["getAttentionState"]>;
+  };
+};
+
+export type AttentionOverlayLane = "now" | "next" | "ambient";
+export type AttentionOverlayStage = "core" | "reconciled" | "display";
+
+export type AttentionOverlayChange = {
+  stage: Exclude<AttentionOverlayStage, "core">;
+  kind: "introduced" | "removed" | "moved";
+  fromLane: AttentionOverlayLane | null;
+  toLane: AttentionOverlayLane | null;
+};
+
+export type AttentionOverlayFrameReport = {
+  taskId: string;
+  title: string;
+  entityType?: string;
+  interactionIds: Partial<Record<AttentionOverlayStage, string>>;
+  lanePath: Record<AttentionOverlayStage, AttentionOverlayLane | null>;
+  canonicalSource: "core" | "reconciled" | "display_overlay";
+  overlayKind?: "approval_overlay" | "display_overlay";
+  liveReconciled?: boolean;
+  attentionRationale: string[];
+  matchedRuleIds: string[];
+  relationHintKinds: string[];
+  changes: AttentionOverlayChange[];
+};
+
+export type AttentionOverlayDiagnostics = {
+  generatedAt: string;
+  summary: {
+    coreFrames: number;
+    reconciledFrames: number;
+    displayFrames: number;
+    introducedByReconciliation: number;
+    removedByReconciliation: number;
+    movedByReconciliation: number;
+    introducedByDisplayOverlay: number;
+    removedByDisplayOverlay: number;
+    movedByDisplayOverlay: number;
+    approvalOverlayFrames: number;
+  };
+  frames: AttentionOverlayFrameReport[];
+};
+
 export type AttentionExport = {
   companyId: string;
   exportedAt: string;
@@ -76,9 +145,21 @@ export type AttentionExport = {
   eventEntries: AttentionLedgerEventEntry[];
   responseEntries: AttentionLedgerResponseEntry[];
   traces: ApertureTrace[];
+  window: {
+    entryLimit: number;
+    traceLimit: number;
+    totalLedgerEntries: number;
+    returnedLedgerEntries: number;
+    totalTraces: number;
+    returnedTraces: number;
+    hasMoreBefore: boolean;
+  };
   snapshot: AttentionSnapshot;
   reconciledSnapshot: AttentionSnapshot;
+  displaySnapshot: AttentionSnapshot;
   review: AttentionReviewState;
+  coreDiagnostics: AttentionCoreDiagnostics;
+  overlayDiagnostics: AttentionOverlayDiagnostics;
 };
 
 export type AttentionDisplayPayload = {
@@ -104,6 +185,12 @@ export type AttentionReplayScenario = {
   title: string;
   description?: string;
   doctrineTags?: string[];
+  window?: {
+    entryLimit: number;
+    totalLedgerEntries: number;
+    returnedSteps: number;
+    hasMoreBefore: boolean;
+  };
   expectations?: {
     finalNowInteractionId?: string | null;
     nextInteractionIds?: string[];
