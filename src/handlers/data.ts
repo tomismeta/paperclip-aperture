@@ -1,5 +1,9 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { mergeSnapshotWithApprovals } from "../aperture/approval-frames.js";
+import {
+  isAttentionLedger,
+  isAttentionReviewState,
+} from "../aperture/persisted-state.js";
 import { reconcileAttentionSnapshot } from "../aperture/reconciliation.js";
 import {
   type AttentionDisplayPayload,
@@ -9,7 +13,6 @@ import {
   createEmptySnapshot,
   normalizeAttentionSnapshot,
   type AttentionLedger,
-  type AttentionLedgerEntry,
   type AttentionLedgerEventEntry,
   type AttentionReplayScenario,
   type AttentionLedgerResponseEntry,
@@ -22,52 +25,9 @@ import {
   ATTENTION_LEDGER_STATE_KEY,
   ATTENTION_REVIEW_STATE_KEY,
   ATTENTION_SNAPSHOT_STATE_KEY,
+  loadPersistedAttentionState,
   requireCompanyId,
 } from "./shared.js";
-
-function isLedgerSource(value: unknown): value is NonNullable<AttentionLedgerEntry["source"]> {
-  if (!value || typeof value !== "object") return false;
-  const source = value as Record<string, unknown>;
-  return typeof source.eventType === "string";
-}
-
-function isAttentionLedgerEntry(value: unknown): value is AttentionLedgerEntry {
-  if (!value || typeof value !== "object") return false;
-
-  const entry = value as Record<string, unknown>;
-  if (
-    (entry.kind !== "event" && entry.kind !== "response")
-    || typeof entry.id !== "string"
-    || typeof entry.occurredAt !== "string"
-    || !isLedgerSource(entry.source)
-  ) {
-    return false;
-  }
-
-  if (entry.kind === "event") return !!entry.apertureEvent && typeof entry.apertureEvent === "object";
-  return !!entry.apertureResponse && typeof entry.apertureResponse === "object";
-}
-
-function isAttentionLedger(value: unknown): value is AttentionLedger {
-  return Array.isArray(value) && value.every(isAttentionLedgerEntry);
-}
-
-function isAttentionReviewState(value: unknown, companyId: string): value is AttentionReviewState {
-  if (!value || typeof value !== "object") return false;
-
-  const review = value as Partial<AttentionReviewState>;
-  if (review.companyId !== companyId || typeof review.updatedAt !== "string") return false;
-  if (!review.frames || typeof review.frames !== "object") return false;
-
-  return Object.values(review.frames).every((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    const candidate = entry as Record<string, unknown>;
-    return (
-      (candidate.lastSeenAt === undefined || typeof candidate.lastSeenAt === "string")
-      && (candidate.suppressedAt === undefined || typeof candidate.suppressedAt === "string")
-    );
-  });
-}
 
 function laterIso(left: string | undefined, right: string | undefined): string | undefined {
   if (!left) return right;
@@ -112,8 +72,6 @@ function deriveReviewStateFromLedger(
 }
 
 type HydratedAttentionState = {
-  legacySnapshotWithoutLedger: boolean;
-  persistedSnapshot: AttentionSnapshot | null;
   baseLedger: AttentionLedger;
   snapshot: AttentionSnapshot;
   reviewState: AttentionReviewState;
@@ -125,12 +83,26 @@ async function ensureAttentionState(
   companyId: string,
 ): Promise<HydratedAttentionState> {
   if (store.hasSession(companyId)) {
+    const liveSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
     return {
-      legacySnapshotWithoutLedger: false,
-      persistedSnapshot: store.getSnapshot(companyId),
       baseLedger: store.getLedger(companyId),
-      snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+      snapshot: liveSnapshot,
       reviewState: store.getReview(companyId) ?? createEmptyReviewState(companyId),
+    };
+  }
+
+  const persistedState = await loadPersistedAttentionState(ctx, companyId);
+  if (persistedState) {
+    const { snapshot } = store.hydrate(companyId, {
+      ledger: persistedState.ledger,
+      snapshot: persistedState.snapshot,
+      review: persistedState.review,
+    });
+
+    return {
+      baseLedger: persistedState.ledger,
+      snapshot,
+      reviewState: persistedState.review,
     };
   }
 
@@ -170,13 +142,7 @@ async function ensureAttentionState(
     });
   }
 
-  return {
-    legacySnapshotWithoutLedger: !isAttentionLedger(persistedLedgerValue) && !!persistedSnapshot,
-    persistedSnapshot,
-    baseLedger,
-    snapshot,
-    reviewState,
-  };
+  return { baseLedger, snapshot, reviewState };
 }
 
 function reconciliationCacheKey(

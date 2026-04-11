@@ -19,6 +19,7 @@ import { explainFrame, signalStrengthLabel } from "../aperture/explainability.js
 import { ATTENTION_CONTEXT_IDS } from "../aperture/attention-context.js";
 import { GENERIC_QUEUED_JUDGMENT, genericJudgmentLine } from "../aperture/attention-language.js";
 import { issueBlocksTargetLine, issueNeedsActionFromLine } from "../aperture/issue-intelligence.js";
+import { parseTaskId, taskEntityId, taskKind } from "../aperture/task-ref.js";
 import {
   ACCENT_BG,
   ACCENT_BG_STYLE,
@@ -191,18 +192,16 @@ function supportingLine(frame: StoredAttentionFrame, lane: FrameLane): string | 
 }
 
 function approvalIdForFrame(frame: StoredAttentionFrame): string | null {
-  const [kind, id] = frame.taskId.split(":");
-  return kind === "approval" && id ? id : null;
+  const taskRef = parseTaskId(frame.taskId);
+  return taskRef?.kind === "approval" ? taskRef.id : null;
 }
 
 function entityIdFromFrame(frame: StoredAttentionFrame): string | null {
-  const parts = frame.taskId.split(":");
-  return parts.length >= 2 ? parts.slice(1).join(":") : null;
+  return taskEntityId(frame.taskId);
 }
 
 function entityTypeFromFrame(frame: StoredAttentionFrame): string | null {
-  const parts = frame.taskId.split(":");
-  return parts.length >= 2 ? parts[0] : null;
+  return taskKind(frame.taskId);
 }
 
 function itemHref(frame: StoredAttentionFrame, companyPrefix: string | null | undefined): string | null {

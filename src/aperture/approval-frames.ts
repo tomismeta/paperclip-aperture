@@ -7,6 +7,7 @@ import {
 } from "./attention-context.js";
 import { mergeStoredFrames } from "./frame-model.js";
 import { approvalBlockingSummary, approvalBlockingWhyNow } from "./attention-language.js";
+import { createInteractionId, createTaskId } from "./task-ref.js";
 import { createEmptySnapshot, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "./types.js";
 import type { ApprovalRecord } from "../host/paperclip-approvals.js";
 export type { ApprovalRecord } from "../host/paperclip-approvals.js";
@@ -42,6 +43,7 @@ export function actionableApprovalRecords(records: ApprovalRecord[] | null): App
 }
 
 export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFrame {
+  const taskId = createTaskId("approval", record.id);
   const payload = record.payload ?? {};
   const budgetOverride = isBudgetOverrideRecord(record);
   const requestedAmount = typeof payload.requestedAmount === "string" ? payload.requestedAmount : undefined;
@@ -60,8 +62,8 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
 
   return {
     id: `approval-bootstrap:${record.id}`,
-    taskId: `approval:${record.id}`,
-    interactionId: `approval:${record.id}:approval`,
+    taskId,
+    interactionId: createInteractionId(taskId, "approval"),
     source: {
       id: "paperclip:approval",
       kind: "paperclip",
@@ -120,7 +122,7 @@ export function mergeSnapshotWithApprovals(
   const approvalFrames = actionableApprovalRecords(approvals).map(approvalRecordToFrame);
   const base = snapshot ?? createEmptySnapshot(companyId);
   const merged = mergeStoredFrames(base, companyId, [
-    ...approvalFrames.map((frame, index) => ({ frame, lane: index === 0 ? "now" as const : "next" as const })),
+    ...approvalFrames.map((frame) => ({ frame, lane: "next" as const })),
   ], review);
   return merged;
 }

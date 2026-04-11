@@ -31,6 +31,7 @@ import {
   type LatestComment,
   truncate,
 } from "./issue-intelligence.js";
+import { createInteractionId, createTaskId } from "./task-ref.js";
 
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 
@@ -149,13 +150,14 @@ function issueFrame(
   const move = issueRecommendedMove(issue, analysis, documentSignal);
   const target = analysis.blockingTarget;
   const semantic = semanticMetadata(analysis.semanticConfidence, analysis.relationHints);
+  const taskId = createTaskId("issue", issue.id);
 
   return {
     lane,
     frame: {
       id: `reconcile:issue:${issue.id}:${updatedAt}`,
-      taskId: `issue:${issue.id}`,
-      interactionId: `issue:${issue.id}:${issue.status}`,
+      taskId,
+      interactionId: createInteractionId(taskId, issue.status),
       source: {
         id: "paperclip:issue",
         kind: "paperclip",
@@ -226,13 +228,14 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
 
   const updatedAt = toIsoString(agent.updatedAt) ?? toIsoString(agent.createdAt) ?? new Date(0).toISOString();
   const provenance = agentProvenance(agent);
+  const taskId = createTaskId("agent", agent.id);
 
   return {
     lane,
     frame: {
       id: `reconcile:agent:${agent.id}:${updatedAt}`,
-      taskId: `agent:${agent.id}`,
-      interactionId: `agent:${agent.id}:${agent.status}`,
+      taskId,
+      interactionId: createInteractionId(taskId, agent.status),
       source: {
         id: "paperclip:agent",
         kind: "paperclip",

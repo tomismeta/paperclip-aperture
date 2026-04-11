@@ -1,5 +1,6 @@
 import type { Issue, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import type { SemanticConfidence, SemanticRelationHint } from "@tomismeta/aperture-core/semantic";
+import { createTaskId } from "./task-ref.js";
 
 export type LatestComment = {
   body: string;
@@ -96,7 +97,7 @@ function escapeRegex(value: string): string {
 }
 
 export function issueRelationTarget(issueId: string): string {
-  return `issue:${issueId}`;
+  return createTaskId("issue", issueId);
 }
 
 function detectIssueIntents(text: string): {

@@ -5,7 +5,7 @@ const manifest: PaperclipPluginManifestV1 = {
   apiVersion: 1,
   version: "0.4.1",
   displayName: "Paperclip Aperture",
-  description: "The live attention layer for Paperclip, powered by Aperture's deterministic attention engine.",
+  description: "The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.",
   author: "@tomismeta",
   categories: ["automation", "ui"],
   capabilities: [

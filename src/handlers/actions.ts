@@ -2,13 +2,13 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import { readFocusMetadata } from "../aperture/contracts.js";
 import { mapDecisionToResponse } from "../aperture/response-mapper.js";
+import { parseTaskId, taskIdMatchesKind, taskKind } from "../aperture/task-ref.js";
 import { createEmptyReviewState, createEmptySnapshot, type AttentionLedgerResponseEntry, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "../aperture/types.js";
 import { submitApprovalDecision } from "../host/paperclip-approvals.js";
 import {
-  ATTENTION_REVIEW_STATE_KEY,
   emitAttentionUpdate,
+  loadPersistedAttentionState,
   logFocusActivity,
-  persistReviewState,
   requireCompanyId,
   requireStringParam,
   runAttentionMutation,
@@ -23,21 +23,8 @@ async function loadReviewState(
   const liveReview = store.getReview(companyId);
   if (liveReview) return liveReview;
 
-  const persisted = await ctx.state.get({
-    scopeKind: "company",
-    scopeId: companyId,
-    stateKey: ATTENTION_REVIEW_STATE_KEY,
-  });
-
-  if (
-    persisted
-    && typeof persisted === "object"
-    && (persisted as AttentionReviewState).companyId === companyId
-    && typeof (persisted as AttentionReviewState).updatedAt === "string"
-    && typeof (persisted as AttentionReviewState).frames === "object"
-  ) {
-    return persisted as AttentionReviewState;
-  }
+  const persisted = await loadPersistedAttentionState(ctx, companyId);
+  if (persisted?.review) return persisted.review;
 
   return createEmptyReviewState(companyId);
 }
@@ -79,17 +66,7 @@ function snapshotContainsTask(snapshot: AttentionSnapshot | null, taskId: string
 }
 
 function entityTypeFromTaskId(taskId: string): string {
-  const separatorIndex = taskId.indexOf(":");
-  return separatorIndex > 0 ? taskId.slice(0, separatorIndex) : "unknown";
-}
-
-function defaultCounts(): AttentionSnapshot["counts"] {
-  return {
-    now: 0,
-    next: 0,
-    ambient: 0,
-    total: 0,
-  };
+  return taskKind(taskId) ?? "unknown";
 }
 
 function laneForTask(snapshot: AttentionSnapshot | null, taskId: string): "now" | "next" | "ambient" | "ui_only" {
@@ -130,7 +107,8 @@ function focusDimensions(
 }
 
 function approvalIdFromTaskId(taskId: string): string | null {
-  return taskId.startsWith("approval:") ? taskId.slice("approval:".length) : null;
+  const taskRef = parseTaskId(taskId);
+  return taskRef?.kind === "approval" ? taskRef.id : null;
 }
 
 export function registerActionHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
@@ -209,11 +187,11 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     const issueId = requireStringParam(params, "issueId");
     const body = requireStringParam(params, "body").trim();
 
-    if (!taskId.startsWith("issue:")) {
+    const taskRef = parseTaskId(taskId);
+    if (!taskRef || taskRef.kind !== "issue") {
       throw new Error("Comments can only be posted on issue-backed frames.");
     }
-    const expectedIssueId = taskId.slice("issue:".length);
-    if (expectedIssueId !== issueId) {
+    if (taskRef.id !== issueId) {
       throw new Error("Issue comment target does not match the selected frame.");
     }
 
@@ -221,15 +199,20 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     const currentSnapshot = store.getSnapshot(companyId);
     const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], false);
-    await persistReviewState(ctx, companyId, review);
-    store.setReview(companyId, review);
-    store.invalidateReconciled(companyId);
+    const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
+      store.setReview(companyId, review);
+      return {
+        ledger: store.getLedger(companyId),
+        snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+        review,
+      };
+    });
     emitAttentionUpdate(ctx, {
       companyId,
       reason: "action",
       eventType: "plugin.local.comment",
-      updatedAt: review.updatedAt,
-      counts: store.getSnapshot(companyId)?.counts ?? defaultCounts(),
+      updatedAt: snapshot.updatedAt,
+      counts: snapshot.counts,
     });
     await trackFocusTelemetry(ctx, "issue_comment_submitted", {
       ...focusDimensions(currentSnapshot, taskId),
@@ -254,7 +237,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     const interactionId = requireStringParam(params, "interactionId");
     const decision = requireStringParam(params, "decision");
 
-    if (taskId.startsWith("approval:") === false) {
+    if (!taskIdMatchesKind(taskId, "approval")) {
       throw new Error("Approval responses can only be recorded for approval-backed frames.");
     }
     if (!["approve", "reject", "request-revision"].includes(decision)) {
@@ -342,18 +325,24 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     }
     const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, taskIds);
-    await persistReviewState(ctx, companyId, review);
-    store.setReview(companyId, review);
+    const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
+      store.setReview(companyId, review);
+      return {
+        ledger: store.getLedger(companyId),
+        snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+        review,
+      };
+    });
     emitAttentionUpdate(ctx, {
       companyId,
       reason: "action",
       eventType: "plugin.local.seen",
-      updatedAt: review.updatedAt,
-      counts: store.getSnapshot(companyId)?.counts ?? defaultCounts(),
+      updatedAt: snapshot.updatedAt,
+      counts: snapshot.counts,
     });
     await trackFocusTelemetry(ctx, "attention_seen_marked", {
       frameCount: taskIds.length,
     });
-    return { ok: true, review };
+    return { ok: true, review, snapshot };
   });
 }

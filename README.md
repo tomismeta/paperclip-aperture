@@ -2,7 +2,7 @@
 
 # Paperclip Aperture
 
-**The live attention layer for Paperclip, powered by Aperture's deterministic attention engine.**
+**The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.**
 
 [![paperclip-aperture npm](https://img.shields.io/npm/v/%40tomismeta%2Fpaperclip-aperture?label=paperclip-aperture&color=2563eb)](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
 [![aperture github](https://img.shields.io/badge/aperture-tomismeta%2Faperture-18181b)](https://github.com/tomismeta/aperture)
@@ -13,7 +13,7 @@
 <p></p>
 </div>
 
-Paperclip Aperture adds a Focus surface to Paperclip that deterministically ranks approvals, issue activity, and other human-facing events into `now`, `next`, and `ambient`.
+Paperclip Aperture adds a Focus surface to Paperclip that turns approvals, issue activity, and other human-facing signals into `now`, `next`, and `ambient`.
 
 It is designed as a live attention layer, not an inbox clone:
 
@@ -70,7 +70,7 @@ and agents                             attention now?    actually sees     to th
 - approval handling, including budget-specific approval semantics
 - issue-aware operator language such as `review required`, `blocked`, and targeted recommended moves
 - agent-aware routing that distinguishes known company agents from human/operator roles when issue text references them
-- a plugin-local deterministic semantic mapping layer that interprets Paperclip issue, approval, and agent signals before publishing them into Aperture Core
+- a plugin-local semantic mapping and policy layer that interprets Paperclip issue, approval, and agent signals before composing the final Focus view
 - richer semantic continuity hints on mapped issue events, including `supersedes` and `resolves` relationships where Paperclip-specific intent is clear
 - document-aware review interpretation for memo/spec-backed issues so Focus can tell the difference between `review is blocked on the artifact` and `the artifact is attached, monitor instead`
 - dynamic re-stacking so items can move between `now`, `next`, and `ambient` as new evidence arrives
@@ -102,17 +102,17 @@ The intent is not to expose every internal scoring detail. It is to help an oper
 
 This plugin treats Paperclip as the host runtime and UI shell, while embedding [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) through the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
-It is a pure SDK integration: Aperture Core is used as-is inside a self-contained Paperclip plugin, with no changes to Aperture Core or Paperclip core.
+It is an SDK-first integration with explicit plugin-side host policy. Aperture Core handles continuity, replay, and attention mechanics; the plugin adds Paperclip-specific candidate generation, approval overlays, and operator language where the host can know more than Core alone.
 
 For `0.4.x`, the boundary works like this:
 
-- the plugin worker owns Aperture ingestion, replay, review state, display composition, and reconciliation caching
+- the plugin worker owns Aperture ingestion, replay, review state, display composition, reconciliation caching, and Paperclip-native policy overlays
 - Paperclip remains the system of record for issue and approval writes
 - approval transport now goes through a worker-side Paperclip adapter using the plugin SDK HTTP client, so the browser UI no longer talks to host approval APIs directly
 - the plugin intentionally publishes `ApertureEvent`s today, using a Paperclip-specific semantic mapping layer and ontology, rather than switching fully to `SourceEvent`
 - that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, explicit rule ids for matched issue heuristics, and shared operator-language generation inside the plugin
 - `activity.logged` document events invalidate stale reconciled state so document-backed review blockers refresh promptly without a full browser-side merge layer
-- Focus exports both attention snapshots and bounded Core traces so replay/debug flows can inspect what Core actually saw
+- Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
 
 The plugin has been validated against [`@tomismeta/aperture-core@0.6.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.403.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
 

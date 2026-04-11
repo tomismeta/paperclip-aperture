@@ -106,7 +106,7 @@ The plugin-side frame merge logic now preserves Core lanes instead of re-scoring
 
 Why it matters:
 
-- keeps Aperture Core as the primary judgment layer
+- keeps Aperture Core as the primary continuity and replay layer while the plugin owns host-native overlays explicitly
 - reduces policy duplication inside the plugin
 
 Key files:
@@ -166,7 +166,7 @@ This pass produced five concrete gains:
    The browser is no longer responsible for host approval transport or final attention composition.
 
 3. **Better SDK leverage**
-   Aperture Core remains the judgment engine.
+   Aperture Core remains the continuity and replay substrate.
    The Paperclip plugin SDK now handles more real integration work through worker-side HTTP, config, telemetry, and streams.
 
 4. **Better performance posture**

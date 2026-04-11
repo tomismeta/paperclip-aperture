@@ -6,6 +6,7 @@ import type { AttentionExport, AttentionReplayScenario, AttentionReviewState, At
 import type { ApprovalRecord } from "../src/aperture/approval-frames.js";
 import plugin from "../src/worker.js";
 import {
+  ATTENTION_STATE_KEY,
   ATTENTION_LEDGER_STATE_KEY,
   ATTENTION_SNAPSHOT_STATE_KEY,
 } from "../src/handlers/shared.js";
@@ -373,26 +374,17 @@ describe("paperclip aperture", () => {
       }),
     ]));
 
-    const persistedLedger = firstHarness.getState({
+    const persistedState = firstHarness.getState({
       scopeKind: "company",
       scopeId: "company-approval-response",
-      stateKey: ATTENTION_LEDGER_STATE_KEY,
-    });
-    const persistedSnapshot = firstHarness.getState({
-      scopeKind: "company",
-      scopeId: "company-approval-response",
-      stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
+      stateKey: ATTENTION_STATE_KEY,
     });
 
     const secondHarness = createTestHarness({ manifest });
     await plugin.definition.setup(secondHarness.ctx);
     await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-approval-response", stateKey: ATTENTION_LEDGER_STATE_KEY },
-      persistedLedger,
-    );
-    await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-approval-response", stateKey: ATTENTION_SNAPSHOT_STATE_KEY },
-      persistedSnapshot,
+      { scopeKind: "company", scopeId: "company-approval-response", stateKey: ATTENTION_STATE_KEY },
+      persistedState,
     );
 
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-approval-response" });
@@ -434,26 +426,17 @@ describe("paperclip aperture", () => {
     );
 
     const original = await firstHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-replay" });
-    const persistedLedger = firstHarness.getState({
+    const persistedState = firstHarness.getState({
       scopeKind: "company",
       scopeId: "company-replay",
-      stateKey: ATTENTION_LEDGER_STATE_KEY,
-    });
-    const persistedSnapshot = firstHarness.getState({
-      scopeKind: "company",
-      scopeId: "company-replay",
-      stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
+      stateKey: ATTENTION_STATE_KEY,
     });
 
     const secondHarness = createTestHarness({ manifest });
     await plugin.definition.setup(secondHarness.ctx);
     await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-replay", stateKey: ATTENTION_LEDGER_STATE_KEY },
-      persistedLedger,
-    );
-    await secondHarness.ctx.state.set(
-      { scopeKind: "company", scopeId: "company-replay", stateKey: ATTENTION_SNAPSHOT_STATE_KEY },
-      persistedSnapshot,
+      { scopeKind: "company", scopeId: "company-replay", stateKey: ATTENTION_STATE_KEY },
+      persistedState,
     );
 
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-replay" });
@@ -486,19 +469,20 @@ describe("paperclip aperture", () => {
       interactionId: initial.now?.interactionId,
     });
 
-    const persistedLedger = firstHarness.getState({
+    const persistedState = firstHarness.getState({
       scopeKind: "company",
       scopeId: "company-review-replay",
-      stateKey: ATTENTION_LEDGER_STATE_KEY,
+      stateKey: ATTENTION_STATE_KEY,
     });
-    const persistedSnapshot = firstHarness.getState({
-      scopeKind: "company",
-      scopeId: "company-review-replay",
-      stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
-    });
+    const persistedLedger = (persistedState as { payload?: { ledger?: unknown } })?.payload?.ledger;
+    const persistedSnapshot = (persistedState as { payload?: { snapshot?: unknown } })?.payload?.snapshot;
 
     const secondHarness = createTestHarness({ manifest });
     await plugin.definition.setup(secondHarness.ctx);
+    await secondHarness.ctx.state.set(
+      { scopeKind: "company", scopeId: "company-review-replay", stateKey: ATTENTION_STATE_KEY },
+      persistedState,
+    );
     await secondHarness.ctx.state.set(
       { scopeKind: "company", scopeId: "company-review-replay", stateKey: ATTENTION_LEDGER_STATE_KEY },
       persistedLedger,
@@ -514,6 +498,44 @@ describe("paperclip aperture", () => {
     const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-review-replay" });
     expect(rebuilt.now).toBeNull();
     expect(rebuilt.counts.total).toBe(0);
+  });
+
+  it("hydrates from the legacy split state keys for backwards compatibility", async () => {
+    const firstHarness = createTestHarness({ manifest });
+    await plugin.definition.setup(firstHarness.ctx);
+
+    await firstHarness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve migration-safe replay",
+        summary: "A legacy replay path is waiting on review.",
+      },
+      { companyId: "company-legacy-envelope", entityId: "approval-legacy-1", entityType: "approval" },
+    );
+
+    const persistedState = firstHarness.getState({
+      scopeKind: "company",
+      scopeId: "company-legacy-envelope",
+      stateKey: ATTENTION_STATE_KEY,
+    }) as { payload?: { ledger?: unknown; snapshot?: unknown } };
+    const persistedLedger = persistedState.payload?.ledger;
+    const persistedSnapshot = persistedState.payload?.snapshot;
+
+    const secondHarness = createTestHarness({ manifest });
+    await plugin.definition.setup(secondHarness.ctx);
+    await secondHarness.ctx.state.set(
+      { scopeKind: "company", scopeId: "company-legacy-envelope", stateKey: ATTENTION_LEDGER_STATE_KEY },
+      persistedLedger,
+    );
+    await secondHarness.ctx.state.set(
+      { scopeKind: "company", scopeId: "company-legacy-envelope", stateKey: ATTENTION_SNAPSHOT_STATE_KEY },
+      persistedSnapshot,
+    );
+
+    const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-legacy-envelope" });
+    expect(rebuilt.now?.title).toBe("Approve migration-safe replay");
+    expect(rebuilt.counts.now).toBe(1);
   });
 
   it("respects the issue lifecycle capture toggle", async () => {
