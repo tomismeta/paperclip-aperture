@@ -1159,6 +1159,52 @@ describe("paperclip aperture", () => {
     expect(traces.length).toBeGreaterThan(0);
   });
 
+  it("bounds export and replay windows while exposing totals", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    for (let index = 1; index <= 5; index += 1) {
+      await harness.emit(
+        "approval.created",
+        {
+          type: "approve_ceo_strategy",
+          title: `Approve launch cutover ${index}`,
+          summary: `Launch cutover ${index} is waiting on a human decision.`,
+        },
+        { companyId: "company-windowed-export", entityId: `approval-window-${index}`, entityType: "approval" },
+      );
+    }
+
+    const exported = await harness.getData<AttentionExport>("attention-export", {
+      companyId: "company-windowed-export",
+      limit: 3,
+      traceLimit: 2,
+    });
+    expect(exported.ledger).toHaveLength(3);
+    expect(exported.window).toEqual(expect.objectContaining({
+      entryLimit: 3,
+      traceLimit: 2,
+      totalLedgerEntries: 5,
+      returnedLedgerEntries: 3,
+      returnedTraces: 2,
+      hasMoreBefore: true,
+    }));
+    expect(exported.ledger[0]?.source.entityId).toBe("approval-window-3");
+    expect(exported.ledger[2]?.source.entityId).toBe("approval-window-5");
+
+    const replay = await harness.getData<AttentionReplayScenario>("attention-replay-scenario", {
+      companyId: "company-windowed-export",
+      limit: 2,
+    });
+    expect(replay.steps).toHaveLength(2);
+    expect(replay.window).toEqual(expect.objectContaining({
+      entryLimit: 2,
+      totalLedgerEntries: 5,
+      returnedSteps: 2,
+      hasMoreBefore: true,
+    }));
+  });
+
   it("reacts to issue document activity events for refresh invalidation", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);

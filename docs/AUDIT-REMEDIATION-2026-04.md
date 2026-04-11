@@ -265,6 +265,21 @@ Key files:
 - `src/ui/issue-comment-composer.tsx`
 - `package.json`
 
+### 18. Bounded Export Windows
+
+Attention export and replay data now return bounded tail windows with explicit totals and truncation metadata instead of always dumping the full in-memory ledger and trace history inline.
+
+Why it matters:
+
+- keeps debug/export surfaces useful as histories grow
+- reduces the pressure to solve full ledger compaction immediately just to keep exports sane
+
+Key files:
+
+- `src/handlers/data.ts`
+- `src/aperture/types.ts`
+- `tests/plugin.spec.ts`
+
 ## Value Received
 
 This pass produced five concrete gains:

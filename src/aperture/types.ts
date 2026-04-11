@@ -76,6 +76,15 @@ export type AttentionExport = {
   eventEntries: AttentionLedgerEventEntry[];
   responseEntries: AttentionLedgerResponseEntry[];
   traces: ApertureTrace[];
+  window: {
+    entryLimit: number;
+    traceLimit: number;
+    totalLedgerEntries: number;
+    returnedLedgerEntries: number;
+    totalTraces: number;
+    returnedTraces: number;
+    hasMoreBefore: boolean;
+  };
   snapshot: AttentionSnapshot;
   reconciledSnapshot: AttentionSnapshot;
   displaySnapshot: AttentionSnapshot;
@@ -105,6 +114,12 @@ export type AttentionReplayScenario = {
   title: string;
   description?: string;
   doctrineTags?: string[];
+  window?: {
+    entryLimit: number;
+    totalLedgerEntries: number;
+    returnedSteps: number;
+    hasMoreBefore: boolean;
+  };
   expectations?: {
     finalNowInteractionId?: string | null;
     nextInteractionIds?: string[];

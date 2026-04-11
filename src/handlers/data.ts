@@ -30,10 +30,48 @@ import {
   requireCompanyId,
 } from "./shared.js";
 
+const DEFAULT_EXPORT_ENTRY_LIMIT = 250;
+const DEFAULT_EXPORT_TRACE_LIMIT = 50;
+const MAX_EXPORT_ENTRY_LIMIT = 1000;
+const MAX_EXPORT_TRACE_LIMIT = 200;
+
 function laterIso(left: string | undefined, right: string | undefined): string | undefined {
   if (!left) return right;
   if (!right) return left;
   return left.localeCompare(right) >= 0 ? left : right;
+}
+
+function boundedPositiveInt(
+  value: unknown,
+  fallback: number,
+  max: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const normalized = Math.trunc(value);
+  if (normalized <= 0) return fallback;
+  return Math.min(normalized, max);
+}
+
+function tailWindow<T>(items: T[], limit: number): {
+  items: T[];
+  total: number;
+  hasMoreBefore: boolean;
+} {
+  const total = items.length;
+  const normalizedLimit = Math.max(1, limit);
+  if (total <= normalizedLimit) {
+    return {
+      items: [...items],
+      total,
+      hasMoreBefore: false,
+    };
+  }
+
+  return {
+    items: items.slice(-normalizedLimit),
+    total,
+    hasMoreBefore: true,
+  };
 }
 
 function deriveReviewStateFromLedger(
@@ -260,20 +298,33 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
 
   ctx.data.register("attention-export", async (params) => {
     const companyId = requireCompanyId(params);
+    const entryLimit = boundedPositiveInt(params.limit, DEFAULT_EXPORT_ENTRY_LIMIT, MAX_EXPORT_ENTRY_LIMIT);
+    const traceLimit = boundedPositiveInt(params.traceLimit, DEFAULT_EXPORT_TRACE_LIMIT, MAX_EXPORT_TRACE_LIMIT);
     const { baseLedger, snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
     const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState, {
       freshHostData: true,
     });
     const approvals = await loadWorkerApprovals(ctx, store, companyId);
     const displaySnapshot = mergeSnapshotWithApprovals(reconciledSnapshot, companyId, approvals, reviewState);
+    const ledgerWindow = tailWindow(baseLedger, entryLimit);
+    const traceWindow = tailWindow(store.getTraces(companyId), traceLimit);
 
     return {
       companyId,
       exportedAt: new Date().toISOString(),
-      ledger: baseLedger,
-      eventEntries: baseLedger.filter((entry): entry is AttentionLedgerEventEntry => entry.kind === "event"),
-      responseEntries: baseLedger.filter((entry): entry is AttentionLedgerResponseEntry => entry.kind === "response"),
-      traces: store.getTraces(companyId),
+      ledger: ledgerWindow.items,
+      eventEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerEventEntry => entry.kind === "event"),
+      responseEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerResponseEntry => entry.kind === "response"),
+      traces: traceWindow.items,
+      window: {
+        entryLimit,
+        traceLimit,
+        totalLedgerEntries: ledgerWindow.total,
+        returnedLedgerEntries: ledgerWindow.items.length,
+        totalTraces: traceWindow.total,
+        returnedTraces: traceWindow.items.length,
+        hasMoreBefore: ledgerWindow.hasMoreBefore || traceWindow.hasMoreBefore,
+      },
       snapshot,
       reconciledSnapshot,
       displaySnapshot,
@@ -289,13 +340,21 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
 
   ctx.data.register("attention-replay-scenario", async (params) => {
     const companyId = requireCompanyId(params);
+    const entryLimit = boundedPositiveInt(params.limit, DEFAULT_EXPORT_ENTRY_LIMIT, MAX_EXPORT_ENTRY_LIMIT);
     const { baseLedger, snapshot } = await ensureAttentionState(ctx, store, companyId);
+    const ledgerWindow = tailWindow(baseLedger, entryLimit);
 
     return {
       id: `paperclip-attention-${companyId}`,
       title: `Paperclip attention replay for ${companyId}`,
       description: "Replay scenario exported from the Paperclip Aperture plugin ledger.",
       doctrineTags: ["paperclip", "aperture", "replay-export"],
+      window: {
+        entryLimit,
+        totalLedgerEntries: ledgerWindow.total,
+        returnedSteps: ledgerWindow.items.length,
+        hasMoreBefore: ledgerWindow.hasMoreBefore,
+      },
       expectations: {
         finalNowInteractionId: snapshot.now?.interactionId ?? null,
         nextInteractionIds: snapshot.next.map((frame) => frame.interactionId),
@@ -306,7 +365,7 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
           ambient: snapshot.counts.ambient,
         },
       },
-      steps: baseLedger.map((entry) => (
+      steps: ledgerWindow.items.map((entry) => (
         entry.kind === "event"
           ? {
               kind: "publish" as const,
