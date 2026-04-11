@@ -1,5 +1,4 @@
 import {
-  usePluginAction,
   type PluginPageProps,
   type PluginSidebarProps,
   type PluginWidgetProps,
@@ -57,8 +56,6 @@ import {
   costsHref,
   driverBadgeStyle,
   driverLabel,
-  entityIdFromFrame,
-  entityTypeFromFrame,
   impactLabel,
   isFrameUnreadInSnapshot,
   isIssueFrame,
@@ -84,26 +81,12 @@ import {
   InlineExplainability,
 } from "./frame-explainability.js";
 import { IssueCommentComposer } from "./issue-comment-composer.js";
-import {
-  acknowledgeFailureMessage,
-  acknowledgeSuccessMessage,
-  approvalDecisionFailureMessage,
-  approvalDecisionSuccessMessage,
-  approvalFrameUnsupportedMessage,
-  approvalRevisionFailureMessage,
-  approvalRevisionSuccessMessage,
-  commentFailureMessage,
-  commentSuccessMessage,
-  issueFrameUnsupportedMessage,
-} from "./interaction-copy.js";
+import { useFocusPageActions } from "./use-focus-page-actions.js";
 
 type DisplayFrame = {
   frame: StoredAttentionFrame;
   lane: FrameLane;
 };
-
-const FOCUS_HOLD_CONTEXT_MS = 20_000;
-const FOCUS_HOLD_COMPOSE_MS = 45_000;
 
 function FrameActions(props: {
   frame: StoredAttentionFrame;
@@ -250,7 +233,7 @@ function NowActionRail(props: {
   wide?: boolean;
   pendingId: string | null;
   itemLink: string | null;
-  onEngageFocus: (frame: StoredAttentionFrame, reason: string, durationMs: number) => void;
+  onEngageFocus: (frame: StoredAttentionFrame, reason: "show_context" | "comment_compose") => void;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
@@ -325,7 +308,7 @@ function NowActionRail(props: {
               tone="accent"
               disabled={isPending}
               onClick={() => {
-                props.onEngageFocus(props.frame, "comment_compose", FOCUS_HOLD_COMPOSE_MS);
+                props.onEngageFocus(props.frame, "comment_compose");
                 setCommentOpen(true);
               }}
             />
@@ -407,7 +390,7 @@ function NowPane(props: {
   companyPrefix: string | null | undefined;
   counts: AttentionSnapshot["counts"];
   pendingId: string | null;
-  onEngageFocus: (frame: StoredAttentionFrame, reason: string, durationMs: number) => void;
+  onEngageFocus: (frame: StoredAttentionFrame, reason: "show_context" | "comment_compose") => void;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
   onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
@@ -503,7 +486,7 @@ function NowPane(props: {
                     type="button"
                     onClick={() => {
                       if (!detailsOpen) {
-                        props.onEngageFocus(frame, "show_context", FOCUS_HOLD_CONTEXT_MS);
+                        props.onEngageFocus(frame, "show_context");
                       }
                       setDetailsOpen(!detailsOpen);
                     }}
@@ -926,33 +909,6 @@ export function AttentionPage(props: PluginPageProps) {
   const snapshot = model.snapshot;
   const loading = model.loading;
   const error = model.error;
-  const acknowledge = usePluginAction("acknowledge-frame");
-  const commentOnIssue = usePluginAction("comment-on-issue");
-  const engageFocus = usePluginAction("engage-focus");
-  const recordApprovalResponse = usePluginAction("record-approval-response");
-  const [pendingId, setPendingId] = useState<string | null>(null);
-  const [statusOverride, setStatusOverride] = useState<string | null>(null);
-  const focusReleaseTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!statusOverride) return;
-
-    const timer = window.setTimeout(() => {
-      setStatusOverride(null);
-    }, 4000);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [statusOverride]);
-
-  useEffect(() => {
-    return () => {
-      if (focusReleaseTimerRef.current) {
-        window.clearTimeout(focusReleaseTimerRef.current);
-      }
-    };
-  }, []);
 
   const displaySnapshot = snapshot;
   const backgroundErrorMessage = displaySnapshot && error ? `Sync issue: ${error.message}` : null;
@@ -966,113 +922,19 @@ export function AttentionPage(props: PluginPageProps) {
     [displaySnapshot],
   );
   const nextMovement = useQueueMovement(nextRows.map((row) => row.frame));
-
-  async function holdNowFrame(frame: StoredAttentionFrame, reason: string, durationMs: number) {
-    if (!companyId) return;
-    if (displaySnapshot?.now?.interactionId !== frame.interactionId) return;
-
-    try {
-      await engageFocus({
-        companyId,
-        taskId: frame.taskId,
-        interactionId: frame.interactionId,
-        reason,
-        durationMs,
-      });
-      model.refresh();
-      if (focusReleaseTimerRef.current) {
-        window.clearTimeout(focusReleaseTimerRef.current);
-      }
-      focusReleaseTimerRef.current = window.setTimeout(() => {
-        model.refresh();
-        focusReleaseTimerRef.current = null;
-      }, durationMs + 150);
-    } catch {
-      // Keep this silent; failed focus hold should not interrupt operator work.
-    }
-  }
-
-  async function acknowledgeFrame(frame: StoredAttentionFrame) {
-    setPendingId(frame.id);
-    try {
-      await acknowledge({ companyId, taskId: frame.taskId, interactionId: frame.interactionId });
-      setStatusOverride(acknowledgeSuccessMessage(compactTitle(frame)));
-      model.refresh();
-    } catch (actionError) {
-      setStatusOverride(acknowledgeFailureMessage(actionError));
-    } finally {
-      setPendingId(null);
-    }
-  }
-
-  async function commentOnIssueFrame(frame: StoredAttentionFrame, body: string) {
-    const issueId = entityIdFromFrame(frame);
-    if (!companyId || !issueId || entityTypeFromFrame(frame) !== "issue") {
-      setStatusOverride(issueFrameUnsupportedMessage());
-      return;
-    }
-
-    setPendingId(frame.id);
-    try {
-      await commentOnIssue({ companyId, taskId: frame.taskId, issueId, body });
-      setStatusOverride(commentSuccessMessage(compactTitle(frame)));
-      model.refresh();
-    } catch (actionError) {
-      setStatusOverride(commentFailureMessage(actionError));
-    } finally {
-      setPendingId(null);
-    }
-  }
-
-  async function submitApprovalDecision(frame: StoredAttentionFrame, decision: "approve" | "reject") {
-    const approvalId = approvalIdForFrame(frame);
-    if (!approvalId) {
-      setStatusOverride(approvalFrameUnsupportedMessage());
-      return;
-    }
-
-    setPendingId(frame.id);
-    try {
-      await recordApprovalResponse({
-        companyId,
-        taskId: frame.taskId,
-        interactionId: frame.interactionId,
-        decision,
-      });
-
-      setStatusOverride(approvalDecisionSuccessMessage(compactTitle(frame), decision));
-      model.refresh();
-    } catch (actionError) {
-      setStatusOverride(approvalDecisionFailureMessage(actionError));
-    } finally {
-      setPendingId(null);
-    }
-  }
-
-  async function requestApprovalRevision(frame: StoredAttentionFrame) {
-    const approvalId = approvalIdForFrame(frame);
-    if (!approvalId) {
-      setStatusOverride(approvalFrameUnsupportedMessage());
-      return;
-    }
-
-    setPendingId(frame.id);
-    try {
-      await recordApprovalResponse({
-        companyId,
-        taskId: frame.taskId,
-        interactionId: frame.interactionId,
-        decision: "request-revision",
-      });
-
-      setStatusOverride(approvalRevisionSuccessMessage(compactTitle(frame)));
-      model.refresh();
-    } catch (actionError) {
-      setStatusOverride(approvalRevisionFailureMessage(actionError));
-    } finally {
-      setPendingId(null);
-    }
-  }
+  const {
+    pendingId,
+    statusOverride,
+    holdNowFrame,
+    acknowledgeFrame,
+    commentOnIssueFrame,
+    submitApprovalDecision,
+    requestApprovalRevision,
+  } = useFocusPageActions({
+    companyId,
+    displaySnapshot,
+    refresh: model.refresh,
+  });
 
   if (!companyId) return <MessageCard title={`Open ${brand.wordmark}`} body={`Select a company to open ${brand.wordmark}.`} />;
   if (!displaySnapshot && loading) return <PageLoadingState label="Loading attention center" />;
