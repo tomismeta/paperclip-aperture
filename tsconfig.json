@@ -21,7 +21,6 @@
     "scripts",
     "tests",
     "esbuild.config.ts",
-    "rollup.config.ts",
     "vitest.config.ts"
   ],
   "exclude": [

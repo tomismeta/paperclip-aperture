@@ -4,7 +4,7 @@ import {
   type PluginSidebarProps,
   type PluginWidgetProps,
 } from "@paperclipai/plugin-sdk/ui";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type AttentionSnapshot,
   type StoredAttentionFrame,
@@ -14,14 +14,10 @@ import {
   isBudgetOverride,
   type FrameLane,
 } from "../aperture/frame-model.js";
-import { readFocusMetadata } from "../aperture/contracts.js";
-import { explainFrame, signalStrengthLabel } from "../aperture/explainability.js";
-import { ATTENTION_CONTEXT_IDS } from "../aperture/attention-context.js";
-import { GENERIC_QUEUED_JUDGMENT, genericJudgmentLine } from "../aperture/attention-language.js";
-import { issueBlocksTargetLine, issueNeedsActionFromLine } from "../aperture/issue-intelligence.js";
-import { parseTaskId, taskEntityId, taskKind } from "../aperture/task-ref.js";
 import {
-  ACCENT_BG,
+  GENERIC_QUEUED_JUDGMENT,
+} from "../aperture/attention-language.js";
+import {
   ACCENT_BG_STYLE,
   ACCENT_BORDER,
   ACCENT_COLOR,
@@ -55,6 +51,40 @@ import {
   useQueueMovement,
 } from "./focus-model.js";
 import {
+  approvalIdForFrame,
+  budgetReason,
+  compactTitle,
+  costsHref,
+  driverBadgeStyle,
+  driverLabel,
+  entityIdFromFrame,
+  entityTypeFromFrame,
+  impactLabel,
+  isFrameUnreadInSnapshot,
+  isIssueFrame,
+  itemHref,
+  judgmentLine,
+  nextPrimaryText,
+  primaryLinkLabel,
+  recommendedMoveValue,
+  renderTitle,
+  requestDescriptor,
+  requestedAmount,
+  responseKind,
+  supportingLine,
+  activityHref,
+  visibleContextItems,
+  actionOwnerValue,
+  blockingTargetValue,
+} from "./frame-helpers.js";
+import {
+  ContextItems,
+  ExplainabilityPanel,
+  ExplainabilityStrip,
+  InlineExplainability,
+} from "./frame-explainability.js";
+import { IssueCommentComposer } from "./issue-comment-composer.js";
+import {
   acknowledgeFailureMessage,
   acknowledgeSuccessMessage,
   approvalDecisionFailureMessage,
@@ -74,230 +104,6 @@ type DisplayFrame = {
 
 const FOCUS_HOLD_CONTEXT_MS = 20_000;
 const FOCUS_HOLD_COMPOSE_MS = 45_000;
-
-function contextValue(frame: StoredAttentionFrame, id: string): string | undefined {
-  const item = frame.context?.items?.find((entry) => entry.id === id);
-  return typeof item?.value === "string" && item.value.trim().length > 0 ? item.value : undefined;
-}
-
-function requestedAmount(frame: StoredAttentionFrame): string | undefined {
-  return contextValue(frame, ATTENTION_CONTEXT_IDS.requestedAmount);
-}
-
-function budgetReason(frame: StoredAttentionFrame): string | undefined {
-  return contextValue(frame, ATTENTION_CONTEXT_IDS.budgetReason);
-}
-
-function recommendedMoveValue(frame: StoredAttentionFrame): string | undefined {
-  return contextValue(frame, ATTENTION_CONTEXT_IDS.recommendedMove);
-}
-
-function actionOwnerValue(frame: StoredAttentionFrame): string | undefined {
-  return contextValue(frame, ATTENTION_CONTEXT_IDS.needsActionFrom);
-}
-
-function blockingTargetValue(frame: StoredAttentionFrame): string | undefined {
-  return contextValue(frame, ATTENTION_CONTEXT_IDS.blocksTarget);
-}
-
-function impactLabel(frame: StoredAttentionFrame): string {
-  return `${frame.consequence} impact`;
-}
-
-function operatorDriverLabel(value: string): string {
-  switch (value) {
-    case "in_review":
-      return "review required";
-    case "pending_approval":
-      return "approval required";
-    default:
-      return value.replace(/_/g, " ");
-  }
-}
-
-function driverLabel(frame: StoredAttentionFrame): string | null {
-  if (isBudgetOverride(frame)) return "budget stop";
-
-  const metadata = readFocusMetadata(frame);
-  const issueStatus = metadata.issueStatus;
-  if (typeof issueStatus === "string" && issueStatus.trim().length > 0) {
-    return operatorDriverLabel(issueStatus);
-  }
-
-  const pauseReason = metadata.pauseReason;
-  if (typeof pauseReason === "string" && pauseReason.trim().length > 0) {
-    return operatorDriverLabel(pauseReason);
-  }
-
-  const agentStatus = metadata.agentStatus;
-  if (typeof agentStatus === "string" && agentStatus.trim().length > 0) {
-    return operatorDriverLabel(agentStatus);
-  }
-
-  return null;
-}
-
-function driverBadgeStyle(): { className: string; style: React.CSSProperties } {
-  return {
-    className: "border-transparent",
-    style: { color: ACCENT_COLOR, backgroundColor: ACCENT_BG, borderColor: ACCENT_BORDER },
-  };
-}
-
-function requestDescriptor(frame: StoredAttentionFrame): string {
-  const driver = driverLabel(frame);
-  return driver ? `${sourceLabel(frame)} \u00b7 ${driver}` : sourceLabel(frame);
-}
-
-function judgmentLine(frame: StoredAttentionFrame, lane: FrameLane): string {
-  if (frame.provenance?.whyNow) return frame.provenance.whyNow;
-  return genericJudgmentLine(frame, lane);
-}
-
-function nextPrimaryText(frame: StoredAttentionFrame): string | null {
-  const recommendedMove = recommendedMoveValue(frame);
-  if (recommendedMove) return recommendedMove;
-
-  const summary = frame.summary?.trim();
-  if (summary) return summary;
-
-  const fallback = judgmentLine(frame, "next");
-  return fallback === GENERIC_QUEUED_JUDGMENT ? null : fallback;
-}
-
-function supportingLine(frame: StoredAttentionFrame, lane: FrameLane): string | null {
-  const owner = actionOwnerValue(frame);
-  const target = blockingTargetValue(frame);
-  if (target && lane === "now" && entityTypeFromFrame(frame) === "issue" && driverLabel(frame) === "review required") {
-    return issueBlocksTargetLine(target);
-  }
-  if (owner && lane === "now" && entityTypeFromFrame(frame) === "issue") {
-    return issueNeedsActionFromLine(owner);
-  }
-
-  if (lane === "now") {
-    const recommendedMove = recommendedMoveValue(frame)?.trim();
-    const summary = frame.summary?.trim();
-    const judgment = judgmentLine(frame, lane).trim();
-
-    if (recommendedMove && summary && summary !== recommendedMove && summary !== judgment) {
-      return summary;
-    }
-
-    return null;
-  }
-
-  const judgment = judgmentLine(frame, lane);
-  return judgment.trim().length > 0 ? judgment : null;
-}
-
-function approvalIdForFrame(frame: StoredAttentionFrame): string | null {
-  const taskRef = parseTaskId(frame.taskId);
-  return taskRef?.kind === "approval" ? taskRef.id : null;
-}
-
-function entityIdFromFrame(frame: StoredAttentionFrame): string | null {
-  return taskEntityId(frame.taskId);
-}
-
-function entityTypeFromFrame(frame: StoredAttentionFrame): string | null {
-  return taskKind(frame.taskId);
-}
-
-function itemHref(frame: StoredAttentionFrame, companyPrefix: string | null | undefined): string | null {
-  const entityType = entityTypeFromFrame(frame);
-  const entityId = entityIdFromFrame(frame);
-  if (!entityType || !entityId || !companyPrefix) return null;
-
-  const pluralType = entityType === "run" ? "runs"
-    : entityType === "approval" ? "approvals"
-    : entityType === "issue" ? "issues"
-    : entityType === "agent" ? "agents"
-    : null;
-
-  if (!pluralType) return null;
-  return `/${companyPrefix}/${pluralType}/${entityId}`;
-}
-
-function costsHref(companyPrefix: string | null | undefined): string | null {
-  return companyPrefix ? `/${companyPrefix}/costs` : null;
-}
-
-function activityHref(frame: StoredAttentionFrame, companyPrefix: string | null | undefined): string | null {
-  if (!companyPrefix) return null;
-  const metadata = readFocusMetadata(frame);
-  return metadata.activityPath ? `/${companyPrefix}/${metadata.activityPath}` : null;
-}
-
-function primaryLinkLabel(frame: StoredAttentionFrame): string {
-  const entityType = entityTypeFromFrame(frame);
-  switch (entityType) {
-    case "approval":
-      return "Open approval";
-    case "issue":
-      return "Open issue";
-    case "run":
-      return "Open run";
-    case "agent":
-      return "Open agent";
-    default:
-      return "Open in Paperclip";
-  }
-}
-
-function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" | "acknowledge" | "none" {
-  if (approvalIdForFrame(frame) && (frame.responseSpec?.kind === "approval" || frame.mode === "approval")) {
-    return "approval";
-  }
-
-  if (lane !== "ambient" && (frame.responseSpec?.kind === "acknowledge" || frame.mode === "status")) {
-    return "acknowledge";
-  }
-
-  return "none";
-}
-
-function isFrameUnreadInSnapshot(frame: StoredAttentionFrame, snapshot: AttentionSnapshot): boolean {
-  const seenAt = snapshot.review?.lastSeenAt;
-  if (!seenAt) return true;
-  return frameUpdatedAt(frame, snapshot.updatedAt).localeCompare(seenAt) > 0;
-}
-
-function compactTitle(frame: StoredAttentionFrame): string {
-  return frame.title.trim().length > 0 ? frame.title : "Untitled frame";
-}
-
-// Highlight entity-like tokens in the title (agent names, identifiers like CAM-9)
-// Matches: uppercase identifiers with hyphens/numbers (CAM-9, AGENT-3), quoted names
-const ENTITY_PATTERN = /\b([A-Z][A-Z0-9]+-\d+)\b|"([^"]+)"/g;
-
-function HighlightedTitle({ text }: { text: string }) {
-  const parts: ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  const re = new RegExp(ENTITY_PATTERN.source, "g");
-
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
-    }
-    const token = match[1] ?? match[2] ?? match[0];
-    parts.push(
-      <Accent key={match.index}>{match[1] ? token : `"${token}"`}</Accent>,
-    );
-    lastIndex = re.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-
-  return <>{parts}</>;
-}
-
-function renderTitle(frame: StoredAttentionFrame): ReactNode {
-  return <HighlightedTitle text={compactTitle(frame)} />;
-}
 
 function FrameActions(props: {
   frame: StoredAttentionFrame;
@@ -354,275 +160,6 @@ function FrameActions(props: {
 // ---------------------------------------------------------------------------
 // Now pane — stable focal placement with progressive disclosure
 // ---------------------------------------------------------------------------
-
-function visibleContextItems(frame: StoredAttentionFrame) {
-  return (frame.context?.items ?? []).filter((item) => item.id !== ATTENTION_CONTEXT_IDS.recommendedMove);
-}
-
-function ContextItems({ frame }: { frame: StoredAttentionFrame }) {
-  const items = visibleContextItems(frame);
-  if (items.length === 0) return null;
-
-  return (
-    <div className="grid gap-2 md:grid-cols-2">
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className={cn(
-            "border border-border bg-secondary/50 px-3 py-2",
-            item.id === ATTENTION_CONTEXT_IDS.latestComment && "md:col-span-2",
-          )}
-        >
-          <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
-          <div className="mt-1 text-sm text-foreground">{item.value ?? "Available"}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ExplainabilityBadges(props: { values: string[]; accent?: boolean }) {
-  if (props.values.length === 0) return null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {props.values.map((value) => (
-        <Badge
-          key={value}
-          className={props.accent ? "border-transparent" : "border-border bg-background/70 text-foreground/80"}
-          style={props.accent ? { color: ACCENT_COLOR, backgroundColor: ACCENT_BG, borderColor: ACCENT_BORDER } : undefined}
-        >
-          {value}
-        </Badge>
-      ))}
-    </div>
-  );
-}
-
-function InlineExplainability(props: {
-  frame: StoredAttentionFrame;
-  lane: FrameLane;
-  preferLaneReason?: boolean;
-}) {
-  const explanation = explainFrame(props.frame, props.lane);
-  const chips = [
-    ...(explanation.signalStrength ? [signalStrengthLabel(explanation.signalStrength)] : []),
-    ...explanation.signals.slice(0, 2),
-    ...explanation.relationLabels.slice(0, 1),
-  ];
-  const label = props.lane === "next" ? "Why next" : props.lane === "ambient" ? "Why ambient" : "Why now";
-  const whyNow = explanation.whyNow ?? judgmentLine(props.frame, props.lane);
-  const primaryLine = props.lane === "now"
-    ? (props.preferLaneReason ? explanation.laneReason : whyNow)
-    : whyNow;
-  const secondaryLine = props.lane === "now"
-    ? (!props.preferLaneReason && whyNow !== explanation.laneReason ? explanation.laneReason : null)
-    : explanation.laneReason;
-
-  return (
-    <div className="space-y-2 border-l-2 pl-4" style={{ borderColor: ACCENT_COLOR }}>
-      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-        {label}
-      </div>
-      <p className="max-w-3xl text-sm leading-relaxed text-foreground/90">
-        {primaryLine}
-      </p>
-      {secondaryLine ? (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          {secondaryLine}
-        </p>
-      ) : null}
-      {chips.length > 0 ? <ExplainabilityBadges values={chips} accent /> : null}
-    </div>
-  );
-}
-
-function ExplainabilityPanel(props: {
-  frame: StoredAttentionFrame;
-  lane: FrameLane;
-  detailOnly?: boolean;
-}) {
-  const explanation = explainFrame(props.frame, props.lane);
-  const strength = !props.detailOnly && explanation.signalStrength ? signalStrengthLabel(explanation.signalStrength) : null;
-  const signalValues = props.detailOnly ? explanation.signals.slice(2) : explanation.signals;
-  const relationValues = props.detailOnly ? explanation.relationLabels.slice(1) : explanation.relationLabels;
-  const reasoningLabel = props.lane === "now" ? "Reasoning" : props.lane === "next" ? "Why it sits here" : "Why it stays quiet";
-
-  if (props.detailOnly && signalValues.length === 0 && relationValues.length === 0 && !explanation.continuity) {
-    return null;
-  }
-
-  return (
-    <div className="space-y-4">
-      {!props.detailOnly ? (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
-          <div>
-            <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-              {reasoningLabel}
-            </div>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              {explanation.laneReason}
-            </p>
-          </div>
-          {strength ? (
-            <div>
-              <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                Confidence
-              </div>
-              <p className="mt-1 text-sm text-foreground/90">{strength}</p>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      {signalValues.length > 0 ? (
-        <div className="space-y-2">
-          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            {props.detailOnly ? "More signals" : "Signals"}
-          </div>
-          <ExplainabilityBadges values={signalValues} />
-        </div>
-      ) : null}
-      {relationValues.length > 0 ? (
-        <div className="space-y-2">
-          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            {props.detailOnly ? "More thread context" : "Thread context"}
-          </div>
-          <ExplainabilityBadges values={relationValues} accent />
-        </div>
-      ) : null}
-      {explanation.continuity ? (
-        <div className="space-y-2">
-          <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-            Related activity
-          </div>
-          <p className="text-sm leading-relaxed text-muted-foreground">{explanation.continuity}</p>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ExplainabilityStrip(props: {
-  frame: StoredAttentionFrame;
-  lane: FrameLane;
-}) {
-  return (
-    <div className="space-y-2 border-t border-border/60 pt-3">
-      <InlineExplainability frame={props.frame} lane={props.lane} />
-    </div>
-  );
-}
-
-function isIssueFrame(frame: StoredAttentionFrame): boolean {
-  return entityTypeFromFrame(frame) === "issue";
-}
-
-function IssueCommentComposer(props: {
-  frame: StoredAttentionFrame;
-  pendingId: string | null;
-  onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
-  triggerTone?: "link" | "secondary" | "primary" | "accent";
-  triggerLabel?: string;
-  triggerFullWidth?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [body, setBody] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const issueFrame = isIssueFrame(props.frame);
-
-  const isPending = props.pendingId === props.frame.id;
-
-  useEffect(() => {
-    setOpen(false);
-    setBody("");
-  }, [props.frame.id]);
-
-  useEffect(() => {
-    if (open && issueFrame) textareaRef.current?.focus();
-  }, [open, issueFrame]);
-
-  if (!issueFrame) return null;
-
-  async function submit() {
-    const nextBody = body.trim();
-    if (!nextBody) return;
-    await props.onComment(props.frame, nextBody);
-    setBody("");
-    setOpen(false);
-  }
-
-  if (!open) {
-    const label = props.triggerLabel ?? "Leave comment";
-    const triggerTone = props.triggerTone ?? "link";
-
-    if (triggerTone === "link") {
-      return (
-        <button
-          type="button"
-          className="text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          onClick={() => setOpen(true)}
-        >
-          {label}
-        </button>
-      );
-    }
-
-    return (
-      <ActionButton
-        label={label}
-        tone={triggerTone}
-        className={props.triggerFullWidth ? "w-full" : undefined}
-        disabled={isPending}
-        onClick={() => setOpen(true)}
-      />
-    );
-  }
-
-  return (
-    <div className="w-full space-y-2 rounded-md border border-border bg-secondary/40 p-3">
-      <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-        Posts to the issue thread without leaving Focus.
-      </div>
-      <textarea
-        ref={textareaRef}
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-            event.preventDefault();
-            void submit();
-          }
-
-          if (event.key === "Escape") {
-            event.preventDefault();
-            setOpen(false);
-            setBody("");
-          }
-        }}
-        rows={3}
-        placeholder="Add a short operator note back to the issue…"
-        className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none transition focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-      />
-      <div className="flex items-center justify-end gap-2">
-        <ActionButton
-          label="Cancel"
-          tone="secondary"
-          disabled={isPending}
-          onClick={() => {
-            setOpen(false);
-            setBody("");
-          }}
-        />
-        <ActionButton
-          label={isPending ? "Posting…" : "Post comment"}
-          tone="accent"
-          disabled={isPending || body.trim().length === 0}
-          onClick={() => void submit()}
-        />
-      </div>
-    </div>
-  );
-}
 
 function NowDetails(props: {
   frame: StoredAttentionFrame;

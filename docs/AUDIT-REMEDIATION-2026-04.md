@@ -248,6 +248,23 @@ Key files:
 - `src/aperture/persisted-state.ts`
 - `tests/persisted-state.spec.ts`
 
+### 17. UI Seams And One Build Path
+
+The Focus UI now splits frame derivation, explainability rendering, and issue-comment composition into dedicated modules, and the unused Rollup build path has been removed.
+
+Why it matters:
+
+- future UI edits no longer require full-file context across all page concerns
+- the repo now has one real build story instead of one active path and one ghost
+
+Key files:
+
+- `src/ui/index.tsx`
+- `src/ui/frame-helpers.tsx`
+- `src/ui/frame-explainability.tsx`
+- `src/ui/issue-comment-composer.tsx`
+- `package.json`
+
 ## Value Received
 
 This pass produced five concrete gains:
