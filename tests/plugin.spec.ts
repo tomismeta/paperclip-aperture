@@ -247,21 +247,96 @@ describe("paperclip aperture", () => {
       taskId: initial.now?.taskId,
       interactionId: initial.now?.interactionId,
       durationMs: 1000,
-      reason: "test_hold",
+      reason: "show_context",
     });
 
     expect(response.ok).toBe(true);
     expect(response.snapshot.now?.title).toBe("Approve pricing memo");
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-focus-hold",
+    });
+    expect(diagnostics.currentNowTask?.signalSummary.counts.viewed).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.currentNowTask?.signalSummary.counts.contextExpanded).toBeGreaterThanOrEqual(1);
     expect(harness.telemetry).toEqual(expect.arrayContaining([
       expect.objectContaining({
         eventName: "focus_engaged",
         dimensions: expect.objectContaining({
           surface: "focus",
           actionKind: "engage",
-          reason: "test_hold",
+          reason: "show_context",
         }),
       }),
     ]));
+  });
+
+  it("records viewed signals for the active now item through the worker action", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-viewed-signal", entityId: "approval-1", entityType: "approval" },
+    );
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-viewed-signal" });
+    await harness.performAction("mark-attention-viewed", {
+      companyId: "company-viewed-signal",
+      taskId: snapshot.now?.taskId,
+      interactionId: snapshot.now?.interactionId,
+      surface: "focus",
+    });
+
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-viewed-signal",
+    });
+    expect(diagnostics.currentNowTask?.signalSummary.counts.viewed).toBeGreaterThanOrEqual(1);
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "frame_viewed",
+        dimensions: expect.objectContaining({
+          surface: "focus",
+          entityType: "approval",
+        }),
+      }),
+    ]));
+  });
+
+  it("tracks operator presence through the plugin bridge", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-presence", entityId: "approval-1", entityType: "approval" },
+    );
+
+    await harness.performAction("set-focus-presence", {
+      companyId: "company-presence",
+      presence: "absent",
+    });
+    let diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-presence",
+    });
+    expect(diagnostics.operatorPresence).toBe("absent");
+
+    await harness.performAction("set-focus-presence", {
+      companyId: "company-presence",
+      presence: "present",
+    });
+    diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-presence",
+    });
+    expect(diagnostics.operatorPresence).toBe("present");
   });
 
   it("captures run failures as high-salience updates", async () => {

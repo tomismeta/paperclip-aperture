@@ -79,6 +79,7 @@ and agents                             attention now?    actually sees     to th
 - worker-owned display composition that merges live Paperclip approvals into the final Focus snapshot before the UI sees it
 - bounded Core trace export and sparse Focus action telemetry/activity writes for replay and debugging
 - live Core diagnostics export, including signal summaries, memory profile snapshots, and current-session attention state for offline analysis
+- worker-bridged operator signals for Focus page presence, active-item viewing, and context expansion so Aperture Core sees real interaction evidence instead of the plugin faking a second attention model
 - a sidebar entry, page, and dashboard widget
 - worker-side host read caching for issue/comment/document/agent reconciliation, with fresh summary/export reads when you need the latest host truth
 - bounded per-company Core sessions with health reporting so the worker does not grow without limit during normal multi-company use

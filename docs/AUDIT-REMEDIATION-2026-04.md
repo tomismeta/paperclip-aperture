@@ -327,6 +327,22 @@ Key files:
 - `src/aperture/types.ts`
 - `tests/plugin.spec.ts`
 
+### 22. Operator Signal Bridging
+
+The Focus UI now forwards operator presence, active-item views, and context expansion back into Aperture Core through worker actions instead of keeping that evidence trapped in browser-local state.
+
+Why it matters:
+
+- Aperture Core now gets real interaction signals from the Focus surface without the plugin inventing more ranking policy
+- the Paperclip/plugin/Core boundary stays cleaner: UI reports behavior, worker bridges it, Core owns the signal history
+
+Key files:
+
+- `src/handlers/actions.ts`
+- `src/aperture/core-store.ts`
+- `src/ui/use-focus-page-actions.ts`
+- `tests/plugin.spec.ts`
+
 ## Value Received
 
 This pass produced five concrete gains:

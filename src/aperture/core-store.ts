@@ -420,6 +420,54 @@ export class ApertureCompanyStore {
     };
   }
 
+  markViewed(
+    companyId: string,
+    taskId: string,
+    interactionId: string,
+    options: { surface?: string } = {},
+  ): {
+    snapshot: AttentionSnapshot;
+    changed: boolean;
+  } {
+    const session = this.ensureSession(companyId);
+    const previousSnapshot = this.syncSnapshotFromCore(companyId, session);
+    session.core.markViewed(taskId, interactionId, options);
+    const snapshot = this.syncSnapshotFromCore(companyId, session);
+    return {
+      snapshot,
+      changed: !sameSnapshotAttention(previousSnapshot, snapshot),
+    };
+  }
+
+  markContextExpanded(
+    companyId: string,
+    taskId: string,
+    interactionId: string,
+    options: { surface?: string; section?: string } = {},
+  ): {
+    snapshot: AttentionSnapshot;
+    changed: boolean;
+  } {
+    const session = this.ensureSession(companyId);
+    const previousSnapshot = this.syncSnapshotFromCore(companyId, session);
+    session.core.markContextExpanded(taskId, interactionId, options);
+    const snapshot = this.syncSnapshotFromCore(companyId, session);
+    return {
+      snapshot,
+      changed: !sameSnapshotAttention(previousSnapshot, snapshot),
+    };
+  }
+
+  setOperatorPresence(
+    companyId: string,
+    presence: "present" | "absent",
+  ): "present" | "absent" {
+    const session = this.ensureSession(companyId);
+    session.core.setOperatorPresence(presence);
+    this.touchSession(session);
+    return session.core.getOperatorPresence();
+  }
+
   private ensureSession(companyId: string): CompanySession {
     let session = this.sessions.get(companyId);
     if (session) {

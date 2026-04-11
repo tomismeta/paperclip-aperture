@@ -31,10 +31,18 @@ export function useFocusPageActions(input: {
   const acknowledge = usePluginAction("acknowledge-frame");
   const commentOnIssue = usePluginAction("comment-on-issue");
   const engageFocus = usePluginAction("engage-focus");
+  const markAttentionViewed = usePluginAction("mark-attention-viewed");
   const recordApprovalResponse = usePluginAction("record-approval-response");
+  const setFocusPresence = usePluginAction("set-focus-presence");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [statusOverride, setStatusOverride] = useState<string | null>(null);
   const focusReleaseTimerRef = useRef<number | null>(null);
+  const lastViewedInteractionRef = useRef<string | null>(null);
+  const markAttentionViewedRef = useRef(markAttentionViewed);
+  const setFocusPresenceRef = useRef(setFocusPresence);
+
+  markAttentionViewedRef.current = markAttentionViewed;
+  setFocusPresenceRef.current = setFocusPresence;
 
   useEffect(() => {
     if (!statusOverride) return;
@@ -55,6 +63,45 @@ export function useFocusPageActions(input: {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const companyId = input.companyId;
+    if (!companyId) return;
+
+    void setFocusPresenceRef.current({ companyId, presence: "present" }).catch(() => {
+      // Presence is best-effort and should not interrupt the operator.
+    });
+
+    return () => {
+      void setFocusPresenceRef.current({ companyId, presence: "absent" }).catch(() => {
+        // Presence is best-effort and should not interrupt the operator.
+      });
+    };
+  }, [input.companyId]);
+
+  useEffect(() => {
+    const companyId = input.companyId;
+    const frame = input.displaySnapshot?.now;
+    if (!companyId || !frame) {
+      lastViewedInteractionRef.current = null;
+      return;
+    }
+
+    const viewKey = `${companyId}:${frame.interactionId}`;
+    if (lastViewedInteractionRef.current === viewKey) return;
+    lastViewedInteractionRef.current = viewKey;
+
+    void markAttentionViewedRef.current({
+      companyId,
+      taskId: frame.taskId,
+      interactionId: frame.interactionId,
+      surface: "focus",
+    }).catch(() => {
+      if (lastViewedInteractionRef.current === viewKey) {
+        lastViewedInteractionRef.current = null;
+      }
+    });
+  }, [input.companyId, input.displaySnapshot?.now?.interactionId]);
 
   async function holdNowFrame(frame: StoredAttentionFrame, reason: "show_context" | "comment_compose") {
     const companyId = input.companyId;

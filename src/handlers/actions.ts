@@ -112,6 +112,45 @@ function approvalIdFromTaskId(taskId: string): string | null {
 }
 
 export function registerActionHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
+  ctx.actions.register("set-focus-presence", async (params) => {
+    const companyId = requireCompanyId(params);
+    const requestedPresence = requireStringParam(params, "presence");
+    const presence = requestedPresence === "absent" ? "absent" : "present";
+    return {
+      ok: true,
+      operatorPresence: store.setOperatorPresence(companyId, presence),
+    };
+  });
+
+  ctx.actions.register("mark-attention-viewed", async (params) => {
+    const companyId = requireCompanyId(params);
+    const taskId = requireStringParam(params, "taskId");
+    const interactionId = requireStringParam(params, "interactionId");
+    const surface = typeof params.surface === "string" && params.surface.trim().length > 0
+      ? params.surface.trim()
+      : "focus";
+
+    const currentSnapshot = store.getSnapshot(companyId);
+    const { snapshot, changed } = store.markViewed(companyId, taskId, interactionId, { surface });
+
+    if (changed) {
+      emitAttentionUpdate(ctx, {
+        companyId,
+        reason: "action",
+        eventType: "plugin.local.viewed",
+        updatedAt: snapshot.updatedAt,
+        counts: snapshot.counts,
+      });
+    }
+
+    await trackFocusTelemetry(ctx, "frame_viewed", {
+      ...focusDimensions(currentSnapshot, taskId),
+      surface,
+    });
+
+    return { ok: true, snapshot, changed };
+  });
+
   ctx.actions.register("engage-focus", async (params) => {
     const companyId = requireCompanyId(params);
     const taskId = requireStringParam(params, "taskId");
@@ -125,6 +164,13 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
 
     const currentSnapshot = store.getSnapshot(companyId);
     const { snapshot, changed } = store.engage(companyId, taskId, interactionId, { durationMs });
+    store.markViewed(companyId, taskId, interactionId, { surface: "focus" });
+    if (reason === "show_context" || reason === "comment_compose") {
+      store.markContextExpanded(companyId, taskId, interactionId, {
+        surface: "focus",
+        section: reason === "show_context" ? "now_context" : "comment_compose",
+      });
+    }
 
     if (changed) {
       emitAttentionUpdate(ctx, {
