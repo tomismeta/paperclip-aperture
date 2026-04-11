@@ -7,6 +7,7 @@ import {
 import { loadReconciledCandidates } from "../aperture/reconciliation.js";
 import { mergeStoredFrames } from "../aperture/frame-model.js";
 import {
+  type AttentionCoreDiagnostics,
   type AttentionDisplayPayload,
   type AttentionExport,
   createEmptyLedger,
@@ -34,6 +35,48 @@ const DEFAULT_EXPORT_ENTRY_LIMIT = 250;
 const DEFAULT_EXPORT_TRACE_LIMIT = 50;
 const MAX_EXPORT_ENTRY_LIMIT = 1000;
 const MAX_EXPORT_TRACE_LIMIT = 200;
+
+function emptyCoreDiagnostics(exportedAt: string): AttentionCoreDiagnostics {
+  return {
+    eventCount: 0,
+    persistence: { state: "healthy" },
+    operatorPresence: "present",
+    globalSignalSummary: {
+      recentSignals: 0,
+      lifetimeSignals: 0,
+      counts: {
+        presented: 0,
+        viewed: 0,
+        responded: 0,
+        dismissed: 0,
+        deferred: 0,
+        contextExpanded: 0,
+        contextSkipped: 0,
+        timedOut: 0,
+        returned: 0,
+        attentionShifted: 0,
+      },
+      deferred: {
+        next: 0,
+        suppressed: 0,
+        manual: 0,
+      },
+      responseRate: 0,
+      dismissalRate: 0,
+      averageResponseLatencyMs: null,
+      averageDismissalLatencyMs: null,
+      lastSignalAt: null,
+    },
+    globalAttentionState: "monitoring",
+    memoryProfile: {
+      version: 1,
+      operatorId: "unknown",
+      updatedAt: exportedAt,
+      sessionCount: 0,
+    },
+    currentNowTask: null,
+  };
+}
 
 function laterIso(left: string | undefined, right: string | undefined): string | undefined {
   if (!left) return right;
@@ -275,6 +318,12 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
     };
   });
 
+  ctx.data.register("attention-diagnostics", async (params) => {
+    const companyId = requireCompanyId(params);
+    await ensureAttentionState(ctx, store, companyId);
+    return store.getCoreDiagnostics(companyId) ?? emptyCoreDiagnostics(new Date().toISOString());
+  });
+
   ctx.data.register("attention-summary", async (params) => {
     const companyId = requireCompanyId(params);
     const { snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
@@ -300,6 +349,7 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
     const companyId = requireCompanyId(params);
     const entryLimit = boundedPositiveInt(params.limit, DEFAULT_EXPORT_ENTRY_LIMIT, MAX_EXPORT_ENTRY_LIMIT);
     const traceLimit = boundedPositiveInt(params.traceLimit, DEFAULT_EXPORT_TRACE_LIMIT, MAX_EXPORT_TRACE_LIMIT);
+    const exportedAt = new Date().toISOString();
     const { baseLedger, snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
     const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState, {
       freshHostData: true,
@@ -311,7 +361,7 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
 
     return {
       companyId,
-      exportedAt: new Date().toISOString(),
+      exportedAt,
       ledger: ledgerWindow.items,
       eventEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerEventEntry => entry.kind === "event"),
       responseEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerResponseEntry => entry.kind === "response"),
@@ -329,6 +379,7 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       reconciledSnapshot,
       displaySnapshot,
       review: reviewState,
+      coreDiagnostics: store.getCoreDiagnostics(companyId) ?? emptyCoreDiagnostics(exportedAt),
     } satisfies AttentionExport;
   });
 

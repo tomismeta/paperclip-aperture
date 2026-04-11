@@ -311,6 +311,22 @@ Key files:
 - `.github/workflows/dependency-review.yml`
 - `CONTRIBUTING.md`
 
+### 21. Live Core Diagnostics Export
+
+The worker now exposes Aperture Core's own signal summaries, attention state, operator presence, and memory profile snapshots through Focus diagnostics/export data.
+
+Why it matters:
+
+- uses more of the live Core runtime we already keep warm per company
+- makes offline debugging and architecture review less dependent on traces alone
+
+Key files:
+
+- `src/aperture/core-store.ts`
+- `src/handlers/data.ts`
+- `src/aperture/types.ts`
+- `tests/plugin.spec.ts`
+
 ## Value Received
 
 This pass produced five concrete gains:

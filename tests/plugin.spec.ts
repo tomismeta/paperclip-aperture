@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestHarness } from "@paperclipai/plugin-sdk/testing";
 import type { Agent, Issue, IssueComment, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import manifest from "../src/manifest.js";
-import type { AttentionExport, AttentionReplayScenario, AttentionReviewState, AttentionSnapshot } from "../src/aperture/types.js";
+import type {
+  AttentionCoreDiagnostics,
+  AttentionExport,
+  AttentionReplayScenario,
+  AttentionReviewState,
+  AttentionSnapshot,
+} from "../src/aperture/types.js";
 import type { ApprovalRecord } from "../src/aperture/approval-frames.js";
 import plugin from "../src/worker.js";
 import {
@@ -190,6 +196,35 @@ describe("paperclip aperture", () => {
         }),
       }),
     ]));
+  });
+
+  it("exposes live core diagnostics for the active company session", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve pricing memo",
+        summary: "The pricing memo is ready for review.",
+      },
+      { companyId: "company-core-diagnostics", entityId: "approval-1", entityType: "approval" },
+    );
+
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-core-diagnostics",
+    });
+    expect(diagnostics.eventCount).toBe(1);
+    expect(diagnostics.currentNowTask?.taskId).toBe("approval:approval-1");
+    expect(diagnostics.memoryProfile.sessionCount).toBeGreaterThan(0);
+    expect(diagnostics.globalSignalSummary.lifetimeSignals).toBeGreaterThanOrEqual(0);
+
+    const exported = await harness.getData<AttentionExport>("attention-export", {
+      companyId: "company-core-diagnostics",
+    });
+    expect(exported.coreDiagnostics.currentNowTask?.taskId).toBe("approval:approval-1");
+    expect(exported.coreDiagnostics.eventCount).toBe(1);
   });
 
   it("records operator engagement for the active now item", async () => {

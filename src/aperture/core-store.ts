@@ -10,6 +10,7 @@ import {
   createAttentionSnapshot,
   createEmptyLedger,
   createEmptyReviewState,
+  type AttentionCoreDiagnostics,
   type AttentionLedgerEntry,
   type AttentionLedgerEventEntry,
   type AttentionLedgerResponseEntry,
@@ -67,6 +68,32 @@ export class ApertureCompanyStore {
       maxCompanySessions: MAX_COMPANY_SESSIONS,
       idleSessionTtlMs: SESSION_IDLE_TTL_MS,
       faultedCompanies: [...this.sessions.values()].filter((session) => session.persistence.state === "faulted").length,
+    };
+  }
+
+  getCoreDiagnostics(companyId: string): AttentionCoreDiagnostics | null {
+    const session = this.sessions.get(companyId);
+    if (!session) return null;
+    this.touchSession(session);
+
+    const snapshot = this.syncSnapshotFromCore(companyId, session);
+    const currentNowTask = snapshot.now
+      ? {
+          taskId: snapshot.now.taskId,
+          interactionId: snapshot.now.interactionId,
+          signalSummary: session.core.getSignalSummary(snapshot.now.taskId),
+          attentionState: session.core.getAttentionState(snapshot.now.taskId),
+        }
+      : null;
+
+    return {
+      eventCount: session.eventCount,
+      persistence: { ...session.persistence },
+      operatorPresence: session.core.getOperatorPresence(),
+      globalSignalSummary: session.core.getSignalSummary(),
+      globalAttentionState: session.core.getAttentionState(),
+      memoryProfile: session.core.snapshotMemoryProfile(snapshot.updatedAt),
+      currentNowTask,
     };
   }
 

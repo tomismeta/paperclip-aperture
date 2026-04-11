@@ -1,4 +1,4 @@
-import type { ApertureEvent, AttentionFrame, AttentionResponse, AttentionView } from "@tomismeta/aperture-core";
+import type { ApertureCore, ApertureEvent, AttentionFrame, AttentionResponse, AttentionView } from "@tomismeta/aperture-core";
 import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
 
 export type StoredAttentionFrame = Pick<
@@ -69,6 +69,25 @@ export type AttentionLedgerResponseEntry = {
 export type AttentionLedgerEntry = AttentionLedgerEventEntry | AttentionLedgerResponseEntry;
 export type AttentionLedger = AttentionLedgerEntry[];
 
+export type AttentionCoreDiagnostics = {
+  eventCount: number;
+  persistence: {
+    state: "healthy" | "faulted";
+    updatedAt?: string;
+    lastError?: string;
+  };
+  operatorPresence: ReturnType<ApertureCore["getOperatorPresence"]>;
+  globalSignalSummary: ReturnType<ApertureCore["getSignalSummary"]>;
+  globalAttentionState: ReturnType<ApertureCore["getAttentionState"]>;
+  memoryProfile: ReturnType<ApertureCore["snapshotMemoryProfile"]>;
+  currentNowTask: null | {
+    taskId: string;
+    interactionId: string;
+    signalSummary: ReturnType<ApertureCore["getSignalSummary"]>;
+    attentionState: ReturnType<ApertureCore["getAttentionState"]>;
+  };
+};
+
 export type AttentionExport = {
   companyId: string;
   exportedAt: string;
@@ -89,6 +108,7 @@ export type AttentionExport = {
   reconciledSnapshot: AttentionSnapshot;
   displaySnapshot: AttentionSnapshot;
   review: AttentionReviewState;
+  coreDiagnostics: AttentionCoreDiagnostics;
 };
 
 export type AttentionDisplayPayload = {
