@@ -1,5 +1,6 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { mergeSnapshotWithApprovals } from "../aperture/approval-frames.js";
+import { FOCUS_SURFACE_CAPABILITIES } from "../aperture/core-capabilities.js";
 import {
   isAttentionLedger,
   isAttentionReviewState,
@@ -42,6 +43,7 @@ function emptyCoreDiagnostics(exportedAt: string): AttentionCoreDiagnostics {
   return {
     eventCount: 0,
     persistence: { state: "healthy" },
+    surfaceCapabilities: FOCUS_SURFACE_CAPABILITIES,
     operatorPresence: "present",
     globalSignalSummary: {
       recentSignals: 0,

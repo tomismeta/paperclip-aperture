@@ -1,4 +1,11 @@
-import type { ApertureCore, ApertureEvent, AttentionFrame, AttentionResponse, AttentionView } from "@tomismeta/aperture-core";
+import type {
+  ApertureCore,
+  ApertureEvent,
+  AttentionFrame,
+  AttentionResponse,
+  AttentionSurfaceCapabilities,
+  AttentionView,
+} from "@tomismeta/aperture-core";
 import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
 
 export type StoredAttentionFrame = Pick<
@@ -76,6 +83,7 @@ export type AttentionCoreDiagnostics = {
     updatedAt?: string;
     lastError?: string;
   };
+  surfaceCapabilities: AttentionSurfaceCapabilities;
   operatorPresence: ReturnType<ApertureCore["getOperatorPresence"]>;
   globalSignalSummary: ReturnType<ApertureCore["getSignalSummary"]>;
   globalAttentionState: ReturnType<ApertureCore["getAttentionState"]>;

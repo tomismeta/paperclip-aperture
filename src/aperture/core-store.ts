@@ -19,6 +19,7 @@ import {
   type AttentionSnapshot,
   type SnapshotSource,
 } from "./types.js";
+import { FOCUS_SURFACE_CAPABILITIES } from "./core-capabilities.js";
 import type { ApprovalRecord } from "../host/paperclip-approvals.js";
 
 type CachedCandidates = {
@@ -89,6 +90,7 @@ export class ApertureCompanyStore {
     return {
       eventCount: session.eventCount,
       persistence: { ...session.persistence },
+      surfaceCapabilities: session.core.getSurfaceCapabilities(),
       operatorPresence: session.core.getOperatorPresence(),
       globalSignalSummary: session.core.getSignalSummary(),
       globalAttentionState: session.core.getAttentionState(),
@@ -528,7 +530,9 @@ export class ApertureCompanyStore {
   }
 
   private createSession(companyId: string): CompanySession {
-    const core = new ApertureCore();
+    const core = new ApertureCore({
+      surfaceCapabilities: FOCUS_SURFACE_CAPABILITIES,
+    });
     const now = Date.now();
     const session: CompanySession = {
       core,

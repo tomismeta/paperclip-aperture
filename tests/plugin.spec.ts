@@ -220,6 +220,8 @@ describe("paperclip aperture", () => {
     expect(diagnostics.currentNowTask?.taskId).toBe("approval:approval-1");
     expect(diagnostics.memoryProfile.sessionCount).toBeGreaterThan(0);
     expect(diagnostics.globalSignalSummary.lifetimeSignals).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.surfaceCapabilities.topology.supportsAmbient).toBe(true);
+    expect(diagnostics.surfaceCapabilities.responses.supportsTextResponse).toBe(true);
 
     const exported = await harness.getData<AttentionExport>("attention-export", {
       companyId: "company-core-diagnostics",
@@ -1468,6 +1470,75 @@ describe("paperclip aperture", () => {
             stage: "reconciled",
             kind: "introduced",
             toLane: "now",
+          }),
+        ]),
+      }),
+    ]));
+  });
+
+  it("surfaces lane moves when host reconciliation demotes a core item behind a newer blocker", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, []);
+
+    harness.seed({
+      issues: [
+        createIssue({
+          companyId: "company-lane-move",
+          status: "in_review",
+          priority: "high",
+        }),
+      ],
+      issueComments: [
+        createIssueComment({
+          companyId: "company-lane-move",
+          issueId: "issue-1",
+          body: "Please review and confirm the direction before CAM-10 can proceed.",
+        }),
+      ],
+      agents: [
+        createAgent({
+          id: "agent-2",
+          companyId: "company-lane-move",
+          name: "Ops Agent",
+          title: "Ops Agent",
+          status: "error",
+          updatedAt: new Date("2026-03-19T10:20:00.000Z"),
+        }),
+      ],
+    });
+
+    await harness.emit(
+      "issue.updated",
+      {
+        identifier: "CAM-9",
+        issueTitle: "Blocked rollout follow-up",
+        summary: "Need clarification from the operator before resuming the rollout.",
+        status: "blocked",
+      },
+      { companyId: "company-lane-move", entityId: "issue-1", entityType: "issue" },
+    );
+
+    const diagnostics = await harness.getData<AttentionOverlayDiagnostics>("attention-overlay-diagnostics", {
+      companyId: "company-lane-move",
+    });
+
+    expect(diagnostics.summary.movedByReconciliation).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: "issue:issue-1",
+        canonicalSource: "core",
+        lanePath: {
+          core: "now",
+          reconciled: "next",
+          display: "next",
+        },
+        changes: expect.arrayContaining([
+          expect.objectContaining({
+            stage: "reconciled",
+            kind: "moved",
+            fromLane: "now",
+            toLane: "next",
           }),
         ]),
       }),
