@@ -280,6 +280,20 @@ Key files:
 - `src/aperture/types.ts`
 - `tests/plugin.spec.ts`
 
+### 19. Retried Audit-Trail Writes
+
+Telemetry and activity writes now retry a couple of times before giving up instead of failing once and disappearing into a warning.
+
+Why it matters:
+
+- transient host/API hiccups are less likely to punch holes in the operator audit trail
+- low-noise observability stays useful without turning write failures into operator-facing errors
+
+Key files:
+
+- `src/handlers/shared.ts`
+- `tests/plugin.spec.ts`
+
 ## Value Received
 
 This pass produced five concrete gains:

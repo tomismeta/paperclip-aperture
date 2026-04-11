@@ -20,6 +20,7 @@ export const ATTENTION_REVIEW_STATE_KEY = "attention-review";
 export const ATTENTION_UPDATES_STREAM = "attention-updates";
 
 const companyMutationQueue = new Map<string, Promise<void>>();
+const BEST_EFFORT_RETRY_DELAYS_MS = [10, 30] as const;
 
 export type AttentionUpdateEvent = {
   companyId: string;
@@ -109,22 +110,45 @@ export function emitAttentionUpdate(
   ctx.streams.emit(ATTENTION_UPDATES_STREAM, event);
 }
 
+async function retryBestEffort(
+  run: () => Promise<void>,
+  onFailure: (error: unknown, attempt: number, final: boolean) => void,
+): Promise<void> {
+  for (let attempt = 0; attempt <= BEST_EFFORT_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      await run();
+      return;
+    } catch (error) {
+      const final = attempt === BEST_EFFORT_RETRY_DELAYS_MS.length;
+      onFailure(error, attempt + 1, final);
+      if (final) return;
+      await new Promise((resolve) => {
+        setTimeout(resolve, BEST_EFFORT_RETRY_DELAYS_MS[attempt]);
+      });
+    }
+  }
+}
+
 export async function trackFocusTelemetry(
   ctx: PluginContext,
   eventName: string,
   dimensions?: Record<string, string | number | boolean>,
 ): Promise<void> {
-  try {
-    await ctx.telemetry.track(eventName, {
-      surface: "focus",
-      ...(dimensions ?? {}),
-    });
-  } catch (error) {
-    ctx.logger.warn("Failed to emit Focus telemetry", {
-      eventName,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await retryBestEffort(
+    async () => {
+      await ctx.telemetry.track(eventName, {
+        surface: "focus",
+        ...(dimensions ?? {}),
+      });
+    },
+    (error, attempt, final) => {
+      ctx.logger.warn(final ? "Failed to emit Focus telemetry after retries" : "Retrying Focus telemetry after failure", {
+        eventName,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 export async function logFocusActivity(
@@ -137,22 +161,26 @@ export async function logFocusActivity(
     metadata?: Record<string, unknown>;
   },
 ): Promise<void> {
-  try {
-    await ctx.activity.log({
-      companyId: entry.companyId,
-      message: entry.message,
-      ...(entry.entityType ? { entityType: entry.entityType } : {}),
-      ...(entry.entityId ? { entityId: entry.entityId } : {}),
-      ...(entry.metadata ? { metadata: entry.metadata } : {}),
-    });
-  } catch (error) {
-    ctx.logger.warn("Failed to write Focus activity log entry", {
-      message: entry.message,
-      entityType: entry.entityType,
-      entityId: entry.entityId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await retryBestEffort(
+    async () => {
+      await ctx.activity.log({
+        companyId: entry.companyId,
+        message: entry.message,
+        ...(entry.entityType ? { entityType: entry.entityType } : {}),
+        ...(entry.entityId ? { entityId: entry.entityId } : {}),
+        ...(entry.metadata ? { metadata: entry.metadata } : {}),
+      });
+    },
+    (error, attempt, final) => {
+      ctx.logger.warn(final ? "Failed to write Focus activity log entry after retries" : "Retrying Focus activity log entry after failure", {
+        message: entry.message,
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        attempt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 type PersistedAttentionMutation = {

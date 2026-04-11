@@ -1026,6 +1026,59 @@ describe("paperclip aperture", () => {
     expect(updated.now?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("Board can cover outreach directly");
   });
 
+  it("retries telemetry writes before giving up", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    const trackSpy = vi.spyOn(harness.ctx.telemetry, "track")
+      .mockRejectedValueOnce(new Error("telemetry unavailable"));
+
+    await harness.performAction("acknowledge-frame", {
+      companyId: "company-live",
+      taskId: snapshot.now?.taskId,
+      interactionId: snapshot.now?.interactionId,
+    });
+
+    expect(trackSpy).toHaveBeenCalledTimes(2);
+    expect(harness.telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventName: "frame_acknowledged",
+      }),
+    ]));
+  });
+
+  it("retries activity writes before giving up", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    const activitySpy = vi.spyOn(harness.ctx.activity, "log")
+      .mockRejectedValueOnce(new Error("activity unavailable"));
+
+    await harness.performAction("comment-on-issue", {
+      companyId: "company-live",
+      taskId: snapshot.now?.taskId,
+      issueId: "issue-1",
+      body: "Board can cover outreach directly this week while tooling is sorted out.",
+    });
+
+    expect(activitySpy).toHaveBeenCalledTimes(2);
+    expect(harness.activity).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        message: "Posted an issue comment from Focus.",
+      }),
+    ]));
+  });
+
   it("surfaces actor routing and a recommended move when the issue text is explicit", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
