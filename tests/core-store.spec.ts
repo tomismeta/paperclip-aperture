@@ -84,4 +84,48 @@ describe("ApertureCompanyStore", () => {
       vi.useRealTimers();
     }
   });
+
+  it("evicts idle company sessions after the TTL window", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T10:00:00.000Z"));
+
+    try {
+      const store = new ApertureCompanyStore();
+      store.ingest(
+        "company-old",
+        approvalEvent({
+          id: "approval-old",
+          taskId: "approval:approval-old",
+          interactionId: "approval:approval-old:approval",
+          timestamp: "2026-04-10T10:00:00.000Z",
+          title: "Approve old company",
+          consequence: "low",
+        }),
+      );
+
+      expect(store.hasSession("company-old")).toBe(true);
+
+      vi.advanceTimersByTime(31 * 60 * 1000);
+
+      store.ingest(
+        "company-new",
+        approvalEvent({
+          id: "approval-new",
+          taskId: "approval:approval-new",
+          interactionId: "approval:approval-new:approval",
+          timestamp: "2026-04-10T10:31:00.000Z",
+          title: "Approve new company",
+          consequence: "low",
+        }),
+      );
+
+      expect(store.hasSession("company-old")).toBe(false);
+      expect(store.hasSession("company-new")).toBe(true);
+      expect(store.getHealth()).toEqual(expect.objectContaining({
+        trackedCompanies: 1,
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

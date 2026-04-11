@@ -23,8 +23,10 @@
     "dev": "tsx ./esbuild.config.ts --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
     "demo:record": "tsx ./scripts/demo/capture.ts",
+    "eval:issue-intelligence": "tsx ./scripts/eval-issue-intelligence.ts",
+    "clean": "rm -rf dist tmp *.tgz",
     "prepack": "pnpm build",
-    "release:check": "pnpm typecheck && pnpm test && pnpm build && npm publish --dry-run",
+    "release:check": "pnpm typecheck && pnpm test && pnpm build && npm pack --dry-run",
     "test": "vitest run --config ./vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },

@@ -69,7 +69,7 @@ export async function listPendingApprovals(
     ctx,
     config,
     `/api/companies/${companyId}/approvals?status=pending`,
-    { method: "GET" },
+    { method: "GET", retries: 2 },
   );
 }
 

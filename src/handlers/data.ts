@@ -4,7 +4,8 @@ import {
   isAttentionLedger,
   isAttentionReviewState,
 } from "../aperture/persisted-state.js";
-import { reconcileAttentionSnapshot } from "../aperture/reconciliation.js";
+import { loadReconciledCandidates } from "../aperture/reconciliation.js";
+import { mergeStoredFrames } from "../aperture/frame-model.js";
 import {
   type AttentionDisplayPayload,
   type AttentionExport,
@@ -146,13 +147,12 @@ async function ensureAttentionState(
 }
 
 function reconciliationCacheKey(
-  snapshot: AttentionSnapshot,
-  reviewState: AttentionReviewState,
+  store: ApertureCompanyStore,
+  companyId: string,
   config: Record<string, unknown>,
 ): string {
   return JSON.stringify({
-    snapshotUpdatedAt: snapshot.updatedAt,
-    reviewUpdatedAt: reviewState.updatedAt,
+    reconciliationRevision: store.getReconciledRevision(companyId),
     captureIssueLifecycle: config.captureIssueLifecycle !== false,
     captureRunFailures: config.captureRunFailures !== false,
   });
@@ -164,18 +164,21 @@ async function loadReconciledAttentionSnapshot(
   companyId: string,
   snapshot: AttentionSnapshot,
   reviewState: AttentionReviewState,
-  options: { preferCache?: boolean } = {},
+  options: { preferCache?: boolean; freshHostData?: boolean } = {},
 ): Promise<AttentionSnapshot> {
   const config = await ctx.config.get();
-  const cacheKey = reconciliationCacheKey(snapshot, reviewState, config);
-  if (options.preferCache) {
-    const cached = store.getCachedReconciledSnapshot(companyId, cacheKey);
-    if (cached) return cached;
+  const cacheKey = reconciliationCacheKey(store, companyId, config);
+  if (options.preferCache && !options.freshHostData) {
+    const cachedCandidates = store.getCachedReconciledCandidates(companyId, cacheKey);
+    if (cachedCandidates) return mergeStoredFrames(snapshot, companyId, cachedCandidates, reviewState);
   }
 
-  const reconciled = await reconcileAttentionSnapshot(ctx, companyId, snapshot, reviewState, config);
-  if (options.preferCache) {
-    store.setCachedReconciledSnapshot(companyId, cacheKey, reconciled);
+  const candidates = await loadReconciledCandidates(ctx, store, companyId, config, {
+    freshHostData: options.freshHostData,
+  });
+  const reconciled = mergeStoredFrames(snapshot, companyId, candidates, reviewState);
+  if (options.preferCache && !options.freshHostData) {
+    store.setCachedReconciledCandidates(companyId, cacheKey, candidates);
   }
   return reconciled;
 }
@@ -223,17 +226,22 @@ async function loadDisplaySnapshot(
 
 export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
   ctx.data.register("health", async () => {
+    const health = store.getHealth();
     return {
       status: "ok",
       checkedAt: new Date().toISOString(),
-      trackedCompanies: store.getCompanyCount(),
+      trackedCompanies: health.trackedCompanies,
+      maxCompanySessions: health.maxCompanySessions,
+      idleSessionTtlMs: health.idleSessionTtlMs,
     };
   });
 
   ctx.data.register("attention-summary", async (params) => {
     const companyId = requireCompanyId(params);
     const { snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
-    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState);
+    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState, {
+      freshHostData: true,
+    });
     return reconciledSnapshot ?? createEmptySnapshot(companyId);
   });
 
@@ -252,7 +260,9 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
   ctx.data.register("attention-export", async (params) => {
     const companyId = requireCompanyId(params);
     const { baseLedger, snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
-    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState);
+    const reconciledSnapshot = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState, {
+      freshHostData: true,
+    });
     const approvals = await loadWorkerApprovals(ctx, store, companyId);
     const displaySnapshot = mergeSnapshotWithApprovals(reconciledSnapshot, companyId, approvals, reviewState);
 

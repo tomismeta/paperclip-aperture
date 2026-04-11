@@ -155,6 +155,70 @@ Key files:
 - `tests/plugin.spec.ts`
 - `tests/frame-model.spec.ts`
 
+## Follow-On Hardening
+
+After the first remediation pass, the worker/runtime got a second hardening slice aimed at the scaling and credibility gaps that still stood out in review.
+
+### 11. Bounded Company Sessions And Health Visibility
+
+The worker now prunes idle company sessions instead of holding every live Core runtime forever, and the health data exposes the current session budget.
+
+Why it matters:
+
+- removes an obvious unbounded-memory failure mode
+- makes multi-tenant behavior easier to reason about operationally
+
+Key files:
+
+- `src/aperture/core-store.ts`
+- `tests/core-store.spec.ts`
+
+### 12. Host Read Caching With Explicit Fresh Paths
+
+Host-side reads for issues, comments, documents, and agents are now cached behind the worker, while summary/export flows can bypass that cache when they need fresh truth instead of fast display.
+
+Why it matters:
+
+- cuts reconciliation fan-out on hot UI paths
+- preserves a trustworthy debug/export surface that does not hide behind TTLs
+
+Key files:
+
+- `src/aperture/reconciliation.ts`
+- `src/handlers/data.ts`
+- `src/handlers/events.ts`
+- `src/handlers/actions.ts`
+
+### 13. Issue Intelligence Eval Harness
+
+Issue-intelligence rules now have a small corpus-backed eval script that runs in CI.
+
+Why it matters:
+
+- converts the intent layer from "just regexes" into something with a pinned regression surface
+- makes future heuristic edits auditable instead of vibes-based
+
+Key files:
+
+- `src/aperture/issue-intelligence.ts`
+- `scripts/eval-issue-intelligence.ts`
+- `tests/fixtures/issue-intelligence-corpus.json`
+- `.github/workflows/ci.yml`
+
+### 14. Small Operability Cleanup
+
+The repo now includes a clean script for local artifacts, exact-pins the Aperture Core dependency, and uses retries on worker-side approval reads.
+
+Why it matters:
+
+- narrows deterministic drift from dependency resolution
+- makes local dev state and network flakiness less annoying
+
+Key files:
+
+- `package.json`
+- `src/host/paperclip-approvals.ts`
+
 ## Value Received
 
 This pass produced five concrete gains:
@@ -196,6 +260,7 @@ The remediation pass was validated with:
 
 - `pnpm typecheck`
 - `pnpm test`
+- `pnpm eval:issue-intelligence`
 - `pnpm build`
 - a live local Paperclip smoke test with the branch build installed and rendering through the real host UI
 

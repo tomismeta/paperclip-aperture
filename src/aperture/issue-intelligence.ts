@@ -26,9 +26,9 @@ type IssueIntentDetector = {
 
 const ISSUE_INTENT_DETECTORS: IssueIntentDetector[] = [
   { id: "clarification.generic", key: "clarification", pattern: /clarif|question|need info|need more|waiting on|feedback/i, description: "Signals that the thread is blocked on clarification or more information." },
-  { id: "resolution.direction", key: "resolution", pattern: /final direction|lock these in|use these|not a request for iteration|proceed to|proceed\.|unblock|ready to proceed/i, description: "Signals that the latest guidance appears to resolve or unblock the thread." },
+  { id: "resolution.direction", key: "resolution", pattern: /final direction|lock these in|use these|not a request for iteration|you can proceed|ready to proceed|unblocked|resolved/i, description: "Signals that the latest guidance appears to resolve or unblock the thread." },
   { id: "artifact.share_with_board", key: "share_with_board", pattern: /share .* with the board/i, description: "Signals that a review artifact still needs to be shared with the board." },
-  { id: "confirmation.explicit", key: "confirmation", pattern: /please review and confirm|review and confirm|confirm the direction|confirm whether/i, description: "Signals an explicit confirmation step before work can continue." },
+  { id: "confirmation.explicit", key: "confirmation", pattern: /please review and confirm|review and confirm|confirm the direction|confirm whether|\bconfirm\b/i, description: "Signals an explicit confirmation step before work can continue." },
   { id: "board_instruction.explicit", key: "board_instruction", pattern: /(board should either .*?)(?:[.!?]|$)/i, description: "Signals explicit board-facing instructions in the latest operator text." },
   { id: "dependency.reference", key: "dependency_reference", pattern: /\b[A-Z]+-\d+\b/, description: "Signals a downstream dependency reference in the thread." },
 ];
@@ -305,13 +305,13 @@ export function issueRecommendedMove(
     return "Share the memo with the board so review can continue.";
   }
 
+  if (analysis.explicitBoardInstruction) return truncate(analysis.explicitBoardInstruction, 140);
+
   if (hasIntent(analysis, "confirmation")) {
     return analysis.blockingTarget
       ? `Confirm the direction so ${analysis.blockingTarget} can proceed.`
       : "Review the draft and confirm whether work should proceed.";
   }
-
-  if (analysis.explicitBoardInstruction) return truncate(analysis.explicitBoardInstruction, 140);
 
   if (/leave a comment/i.test(normalized)) {
     return "Leave a comment with enough context for work to resume.";

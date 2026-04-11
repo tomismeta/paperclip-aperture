@@ -1204,7 +1204,7 @@ describe("paperclip aperture", () => {
     await harness.getData("attention-display", { companyId: "company-live" });
 
     expect(listIssues.mock.calls.length).toBeGreaterThan(issueCallsAfterFirstRead);
-    expect(listComments.mock.calls.length).toBeGreaterThan(commentCallsAfterFirstRead);
+    expect(listComments.mock.calls.length).toBe(commentCallsAfterFirstRead);
     expect(listDocuments.mock.calls.length).toBeGreaterThan(documentCallsAfterFirstRead);
   });
 

@@ -200,6 +200,13 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     const currentReview = await loadReviewState(ctx, store, companyId);
     const review = buildSeenReviewState(currentReview, companyId, [taskId], false);
     const { snapshot } = await runAttentionMutation(ctx, store, companyId, () => {
+      store.invalidateHostCache(companyId, {
+        keys: [
+          `issue:${issueId}:detail`,
+          `issue:${issueId}:comments`,
+        ],
+        prefixes: ["issues:blocked", "issues:in_review"],
+      });
       store.setReview(companyId, review);
       return {
         ledger: store.getLedger(companyId),

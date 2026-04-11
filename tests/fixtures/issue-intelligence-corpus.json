@@ -1,0 +1,104 @@
+[
+  {
+    "name": "share-with-board-review-blocker",
+    "issue": {
+      "id": "issue-1",
+      "identifier": "APE-7",
+      "title": "Review pricing experiment memo",
+      "description": "Board review is waiting on the memo.",
+      "status": "in_review"
+    },
+    "comment": "I don't actually see the actual memo. Can you share it with the board?",
+    "expected": {
+      "intents": ["share_with_board"],
+      "recommendedMove": "Share the memo with the board so review can continue.",
+      "headline": "Board still needs the memo before review can continue."
+    }
+  },
+  {
+    "name": "explicit-confirmation-with-blocking-target",
+    "issue": {
+      "id": "issue-2",
+      "identifier": "APE-2",
+      "title": "Lock launch direction",
+      "description": "Need confirmation before follow-on work proceeds.",
+      "status": "blocked"
+    },
+    "comment": "Please review and confirm the direction so APE-4 can proceed.",
+    "expected": {
+      "intents": ["confirmation", "dependency_reference"],
+      "blockingTarget": "APE-4",
+      "recommendedMove": "Confirm the direction so APE-4 can proceed.",
+      "headline": "Waiting on confirmation before APE-4 can proceed."
+    }
+  },
+  {
+    "name": "board-instruction",
+    "issue": {
+      "id": "issue-3",
+      "identifier": "APE-9",
+      "title": "Reach out to early users",
+      "description": "Board should either send the outreach directly or equip the agent with comms tooling.",
+      "status": "blocked"
+    },
+    "comment": "Blocked on actual outreach.",
+    "expected": {
+      "intents": ["board_instruction"],
+      "owner": "Board",
+      "recommendedMove": "Board should either send the outreach directly or equip the agent with comms tooling",
+      "headline": "Blocked on board action before work can continue."
+    }
+  },
+  {
+    "name": "agent-owner-clarification",
+    "issue": {
+      "id": "issue-4",
+      "identifier": "APE-11",
+      "title": "Confirm prototype handoff",
+      "description": "Need the implementation owner to confirm the handoff before rollout.",
+      "status": "blocked"
+    },
+    "comment": "Needed from Founding Engineer: confirm the rollout handoff before the board reviews it.",
+    "directory": {
+      "agentNames": ["Founding Engineer"]
+    },
+    "expected": {
+      "intents": ["confirmation"],
+      "owner": "Founding Engineer",
+      "recommendedMove": "Review the draft and confirm whether work should proceed.",
+      "headline": "Blocked on Founding Engineer action before work can continue."
+    }
+  },
+  {
+    "name": "resolution-direction",
+    "issue": {
+      "id": "issue-5",
+      "identifier": "APE-12",
+      "title": "Lock pricing copy",
+      "description": "Need final direction before launch work resumes.",
+      "status": "blocked"
+    },
+    "comment": "Final direction: use these and proceed to launch prep.",
+    "expected": {
+      "intents": ["resolution"],
+      "recommendedMove": "Monitor execution and confirm the team resumes work.",
+      "headline": "Latest operator guidance appears to unblock this issue."
+    }
+  },
+  {
+    "name": "generic-clarification",
+    "issue": {
+      "id": "issue-6",
+      "identifier": "APE-13",
+      "title": "Sort rollout fix",
+      "description": "Need clarification from the operator before resuming the rollout.",
+      "status": "blocked"
+    },
+    "comment": "Need more info before we can proceed.",
+    "expected": {
+      "intents": ["clarification"],
+      "recommendedMove": "Unblock the dependency or add the missing context needed to continue.",
+      "headline": "Blocked issue waiting on clarification before work can continue."
+    }
+  }
+]

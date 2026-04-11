@@ -5,6 +5,7 @@ import {
   type AttentionResponse,
 } from "@tomismeta/aperture-core";
 import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
+import type { StoredFrameCandidate } from "./frame-model.js";
 import {
   createAttentionSnapshot,
   createEmptyLedger,
@@ -19,9 +20,14 @@ import {
 } from "./types.js";
 import type { ApprovalRecord } from "../host/paperclip-approvals.js";
 
-type CachedSnapshot = {
+type CachedCandidates = {
   key: string;
-  snapshot: AttentionSnapshot;
+  candidates: StoredFrameCandidate[];
+};
+
+type HostCacheEntry = {
+  value: unknown;
+  expiresAt: number;
 };
 
 type CompanySession = {
@@ -31,17 +37,30 @@ type CompanySession = {
   review: AttentionReviewState;
   eventCount: number;
   traces: ApertureTrace[];
-  reconciled: CachedSnapshot | null;
+  reconciledCandidates: CachedCandidates | null;
   approvals: {
     records: ApprovalRecord[] | null;
     dirty: boolean;
   };
+  hostCache: Map<string, HostCacheEntry>;
+  hostDataRevision: number;
+  lastTouchedAt: number;
 };
 
 const MAX_TRACE_HISTORY = 100;
+const MAX_COMPANY_SESSIONS = 100;
+const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 
 export class ApertureCompanyStore {
   private readonly sessions = new Map<string, CompanySession>();
+
+  getHealth() {
+    return {
+      trackedCompanies: this.sessions.size,
+      maxCompanySessions: MAX_COMPANY_SESSIONS,
+      idleSessionTtlMs: SESSION_IDLE_TTL_MS,
+    };
+  }
 
   hasSession(companyId: string): boolean {
     return this.sessions.has(companyId);
@@ -60,6 +79,7 @@ export class ApertureCompanyStore {
   } {
     const existing = this.sessions.get(companyId);
     if (existing) {
+      this.touchSession(existing);
       return {
         snapshot: existing.snapshot ?? createAttentionSnapshot(companyId, existing.core.getAttentionView()),
         review: existing.review,
@@ -89,6 +109,7 @@ export class ApertureCompanyStore {
     }
 
     this.sessions.set(companyId, session);
+    this.pruneSessions();
     return {
       snapshot: session.snapshot,
       review: session.review,
@@ -116,15 +137,21 @@ export class ApertureCompanyStore {
   getSnapshot(companyId: string): AttentionSnapshot | null {
     const session = this.sessions.get(companyId);
     if (!session) return null;
+    this.touchSession(session);
     return this.syncSnapshotFromCore(companyId, session);
   }
 
   getLedger(companyId: string): AttentionLedger {
-    return [...(this.sessions.get(companyId)?.ledger ?? [])];
+    const session = this.sessions.get(companyId);
+    if (session) this.touchSession(session);
+    return [...(session?.ledger ?? [])];
   }
 
   getReview(companyId: string): AttentionReviewState | null {
-    return this.sessions.get(companyId)?.review ?? null;
+    const session = this.sessions.get(companyId);
+    if (!session) return null;
+    this.touchSession(session);
+    return session.review;
   }
 
   setReview(companyId: string, review: AttentionReviewState): AttentionReviewState {
@@ -135,23 +162,80 @@ export class ApertureCompanyStore {
   }
 
   getTraces(companyId: string): ApertureTrace[] {
-    return [...(this.sessions.get(companyId)?.traces ?? [])];
+    const session = this.sessions.get(companyId);
+    if (session) this.touchSession(session);
+    return [...(session?.traces ?? [])];
   }
 
-  getCachedReconciledSnapshot(companyId: string, key: string): AttentionSnapshot | null {
-    const cached = this.sessions.get(companyId)?.reconciled;
-    return cached?.key === key ? cached.snapshot : null;
+  getCachedReconciledCandidates(companyId: string, key: string): StoredFrameCandidate[] | null {
+    const session = this.sessions.get(companyId);
+    if (session) this.touchSession(session);
+    const cached = session?.reconciledCandidates;
+    return cached?.key === key ? [...cached.candidates] : null;
   }
 
-  setCachedReconciledSnapshot(companyId: string, key: string, snapshot: AttentionSnapshot): AttentionSnapshot {
+  setCachedReconciledCandidates(companyId: string, key: string, candidates: StoredFrameCandidate[]): StoredFrameCandidate[] {
     const session = this.ensureSession(companyId);
-    session.reconciled = { key, snapshot };
-    return snapshot;
+    session.reconciledCandidates = {
+      key,
+      candidates: [...candidates],
+    };
+    return [...candidates];
+  }
+
+  getReconciledRevision(companyId: string): number {
+    return this.sessions.get(companyId)?.hostDataRevision ?? 0;
   }
 
   invalidateReconciled(companyId: string): void {
     const session = this.sessions.get(companyId);
-    if (session) session.reconciled = null;
+    if (!session) return;
+    session.reconciledCandidates = null;
+    session.hostDataRevision += 1;
+  }
+
+  getCachedHostValue<T>(companyId: string, key: string): T | null {
+    const session = this.sessions.get(companyId);
+    if (!session) return null;
+    this.touchSession(session);
+    const cached = session.hostCache.get(key);
+    if (!cached) return null;
+    if (cached.expiresAt <= Date.now()) {
+      session.hostCache.delete(key);
+      return null;
+    }
+    return cached.value as T;
+  }
+
+  setCachedHostValue<T>(companyId: string, key: string, value: T, ttlMs: number): T {
+    const session = this.ensureSession(companyId);
+    session.hostCache.set(key, {
+      value,
+      expiresAt: Date.now() + Math.max(1, ttlMs),
+    });
+    return value;
+  }
+
+  invalidateHostCache(
+    companyId: string,
+    options: {
+      keys?: string[];
+      prefixes?: string[];
+      bumpRevision?: boolean;
+    } = {},
+  ): void {
+    const session = this.sessions.get(companyId);
+    if (!session) return;
+    const { keys = [], prefixes = [], bumpRevision = true } = options;
+    for (const key of keys) session.hostCache.delete(key);
+    if (prefixes.length > 0) {
+      for (const key of [...session.hostCache.keys()]) {
+        if (prefixes.some((prefix) => key.startsWith(prefix))) {
+          session.hostCache.delete(key);
+        }
+      }
+    }
+    if (bumpRevision) this.invalidateReconciled(companyId);
   }
 
   getApprovals(companyId: string): ApprovalRecord[] | null {
@@ -168,7 +252,9 @@ export class ApertureCompanyStore {
   }
 
   approvalsDirty(companyId: string): boolean {
-    return this.sessions.get(companyId)?.approvals.dirty ?? true;
+    const session = this.sessions.get(companyId);
+    if (session) this.touchSession(session);
+    return session?.approvals.dirty ?? true;
   }
 
   invalidateApprovals(companyId: string): void {
@@ -202,7 +288,7 @@ export class ApertureCompanyStore {
       const frame = session.core.publish(entry.apertureEvent);
       session.eventCount += 1;
       session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), entry.source, entry.occurredAt);
-      session.reconciled = null;
+      session.reconciledCandidates = null;
       return {
         frame,
         ledger: this.getLedger(companyId),
@@ -230,7 +316,7 @@ export class ApertureCompanyStore {
     try {
       session.core.submit(entry.apertureResponse);
       session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), entry.source, entry.occurredAt);
-      session.reconciled = null;
+      session.reconciledCandidates = null;
       return {
         ledger: this.getLedger(companyId),
         snapshot: session.snapshot,
@@ -246,7 +332,7 @@ export class ApertureCompanyStore {
   replaceLedger(companyId: string, ledger: AttentionLedger): AttentionLedger {
     const session = this.ensureSession(companyId);
     session.ledger = [...ledger];
-    session.reconciled = null;
+    session.reconciledCandidates = null;
     return this.getLedger(companyId);
   }
 
@@ -299,15 +385,20 @@ export class ApertureCompanyStore {
 
   private ensureSession(companyId: string): CompanySession {
     let session = this.sessions.get(companyId);
-    if (session) return session;
+    if (session) {
+      this.touchSession(session);
+      return session;
+    }
 
     session = this.createSession(companyId);
     this.sessions.set(companyId, session);
+    this.pruneSessions();
     return session;
   }
 
   private createSession(companyId: string): CompanySession {
     const core = new ApertureCore();
+    const now = Date.now();
     const session: CompanySession = {
       core,
       snapshot: null,
@@ -315,11 +406,14 @@ export class ApertureCompanyStore {
       review: createEmptyReviewState(companyId),
       eventCount: 0,
       traces: [],
-      reconciled: null,
+      reconciledCandidates: null,
       approvals: {
         records: null,
         dirty: true,
       },
+      hostCache: new Map<string, HostCacheEntry>(),
+      hostDataRevision: 0,
+      lastTouchedAt: now,
     };
 
     core.onTrace((trace) => {
@@ -327,6 +421,29 @@ export class ApertureCompanyStore {
     });
 
     return session;
+  }
+
+  private touchSession(session: CompanySession): void {
+    session.lastTouchedAt = Date.now();
+  }
+
+  private pruneSessions(): void {
+    const now = Date.now();
+    for (const [companyId, session] of this.sessions.entries()) {
+      if (now - session.lastTouchedAt > SESSION_IDLE_TTL_MS) {
+        this.sessions.delete(companyId);
+      }
+    }
+
+    if (this.sessions.size <= MAX_COMPANY_SESSIONS) return;
+
+    const oldestSessions = [...this.sessions.entries()]
+      .sort((left, right) => left[1].lastTouchedAt - right[1].lastTouchedAt);
+
+    while (this.sessions.size > MAX_COMPANY_SESSIONS && oldestSessions.length > 0) {
+      const [companyId] = oldestSessions.shift() as [string, CompanySession];
+      this.sessions.delete(companyId);
+    }
   }
 
   private syncSnapshotFromCore(companyId: string, session: CompanySession): AttentionSnapshot {

@@ -79,6 +79,9 @@ and agents                             attention now?    actually sees     to th
 - worker-owned display composition that merges live Paperclip approvals into the final Focus snapshot before the UI sees it
 - bounded Core trace export and sparse Focus action telemetry/activity writes for replay and debugging
 - a sidebar entry, page, and dashboard widget
+- worker-side host read caching for issue/comment/document/agent reconciliation, with fresh summary/export reads when you need the latest host truth
+- bounded per-company Core sessions with health reporting so the worker does not grow without limit during normal multi-company use
+- a corpus-backed `issue-intelligence` regression check in CI so heuristic edits stay inspectable
 
 ## Explainability
 
@@ -124,12 +127,14 @@ If your Paperclip host is not running at the default local address, set the plug
 pnpm install
 pnpm typecheck
 pnpm test
+pnpm eval:issue-intelligence
 pnpm build
 ```
 
 Before releasing, run:
 
 ```bash
+pnpm clean
 pnpm release:check
 ```
 

@@ -36,5 +36,8 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Issue intelligence eval
+        run: pnpm eval:issue-intelligence
+
       - name: Pack dry run
         run: npm pack --dry-run
