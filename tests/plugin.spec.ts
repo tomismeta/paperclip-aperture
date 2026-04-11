@@ -940,6 +940,47 @@ describe("paperclip aperture", () => {
     ]));
   });
 
+  it("restores the prior focus state and marks health when persistence fails", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const initial = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    expect(initial.now?.taskId).toBe("issue:issue-1");
+
+    const originalSet = harness.ctx.state.set.bind(harness.ctx.state);
+    vi.spyOn(harness.ctx.state, "set").mockImplementationOnce(async (descriptor, value) => {
+      if (descriptor.stateKey === ATTENTION_STATE_KEY) {
+        throw new Error("state persistence unavailable");
+      }
+      return originalSet(descriptor, value);
+    });
+
+    await expect(harness.performAction("acknowledge-frame", {
+      companyId: "company-live",
+      taskId: initial.now?.taskId,
+      interactionId: initial.now?.interactionId,
+    })).rejects.toThrow("state persistence unavailable");
+
+    const restored = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    expect(restored.now?.taskId).toBe("issue:issue-1");
+
+    const failedHealth = await harness.getData<{ faultedCompanies: number }>("health", {});
+    expect(failedHealth.faultedCompanies).toBe(1);
+
+    await harness.performAction("acknowledge-frame", {
+      companyId: "company-live",
+      taskId: restored.now?.taskId,
+      interactionId: restored.now?.interactionId,
+    });
+
+    const recoveredHealth = await harness.getData<{ faultedCompanies: number }>("health", {});
+    expect(recoveredHealth.faultedCompanies).toBe(0);
+  });
+
   it("posts issue comments back to Paperclip from the frame action", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);

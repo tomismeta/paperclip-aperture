@@ -183,19 +183,32 @@ export async function runAttentionMutation<T extends PersistedAttentionMutation>
   const previousReview = store.getReview(companyId)
     ?? persistedState?.review
     ?? createEmptyReviewState(companyId);
+  const fallbackState = persistedState ?? {
+    companyId,
+    ledger: previousLedger,
+    snapshot: previousSnapshot,
+    review: previousReview,
+  };
 
   try {
     const result = await mutation();
-    if (result.review) store.setReview(companyId, result.review);
-    await persistAttentionState(ctx, companyId, {
-      ledger: result.ledger,
-      snapshot: result.snapshot,
-      review: result.review ?? store.getReview(companyId) ?? previousReview,
-    });
-    return result;
+
+    try {
+      if (result.review) store.setReview(companyId, result.review);
+      await persistAttentionState(ctx, companyId, {
+        ledger: result.ledger,
+        snapshot: result.snapshot,
+        review: result.review ?? store.getReview(companyId) ?? previousReview,
+      });
+      store.markPersistenceHealthy(companyId);
+      return result;
+    } catch (error) {
+      store.restore(companyId, fallbackState);
+      store.markPersistenceFault(companyId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   } catch (error) {
-    store.rebuildFromLedger(companyId, previousLedger);
-    store.setReview(companyId, previousReview);
+    store.restore(companyId, fallbackState);
     throw error;
   } finally {
     release();

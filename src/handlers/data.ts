@@ -233,6 +233,7 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       trackedCompanies: health.trackedCompanies,
       maxCompanySessions: health.maxCompanySessions,
       idleSessionTtlMs: health.idleSessionTtlMs,
+      faultedCompanies: health.faultedCompanies,
     };
   });
 

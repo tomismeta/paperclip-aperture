@@ -82,6 +82,8 @@ and agents                             attention now?    actually sees     to th
 - worker-side host read caching for issue/comment/document/agent reconciliation, with fresh summary/export reads when you need the latest host truth
 - bounded per-company Core sessions with health reporting so the worker does not grow without limit during normal multi-company use
 - a corpus-backed `issue-intelligence` regression check in CI so heuristic edits stay inspectable
+- rollback-safe local mutations that restore the last durable attention state if persistence fails
+- versioned persisted attention envelopes with an explicit migration path for older schemas
 
 ## Explainability
 
@@ -105,11 +107,12 @@ The intent is not to expose every internal scoring detail. It is to help an oper
 
 This plugin treats Paperclip as the host runtime and UI shell, while embedding [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) through the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
 
-It is an SDK-first integration with explicit plugin-side host policy. Aperture Core handles continuity, replay, and attention mechanics; the plugin adds Paperclip-specific candidate generation, approval overlays, and operator language where the host can know more than Core alone.
+It is an SDK-first integration with explicit plugin-side host policy. Aperture Core handles continuity, replay, and global attention mechanics; the plugin adds Paperclip-specific candidate generation, approval overlays, and operator language where the host can know more than Core alone.
 
 For `0.4.x`, the boundary works like this:
 
 - the plugin worker owns Aperture ingestion, replay, review state, display composition, reconciliation caching, and Paperclip-native policy overlays
+- the final Focus view is therefore Core-backed but not Core-only today: the plugin still owns some Paperclip-specific candidate and lane policy where the host has facts Core cannot infer by itself
 - Paperclip remains the system of record for issue and approval writes
 - approval transport now goes through a worker-side Paperclip adapter using the plugin SDK HTTP client, so the browser UI no longer talks to host approval APIs directly
 - the plugin intentionally publishes `ApertureEvent`s today, using a Paperclip-specific semantic mapping layer and ontology, rather than switching fully to `SourceEvent`

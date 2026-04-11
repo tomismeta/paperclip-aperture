@@ -9,18 +9,34 @@ import {
   type AttentionSnapshot,
 } from "./types.js";
 
-export const ATTENTION_STATE_SCHEMA_VERSION = 1;
+const LEGACY_ATTENTION_STATE_SCHEMA_VERSION = 1;
+export const ATTENTION_STATE_SCHEMA_VERSION = 2;
+
+export type PersistedAttentionStateMeta = {
+  persistedAt: string;
+  ledgerEntries: number;
+  eventEntries: number;
+  responseEntries: number;
+};
 
 export type PersistedAttentionState = {
   companyId: string;
   ledger: AttentionLedger;
   snapshot: AttentionSnapshot;
   review: AttentionReviewState;
+  meta: PersistedAttentionStateMeta;
 };
 
 export type PersistedAttentionStateEnvelope = {
   schemaVersion: typeof ATTENTION_STATE_SCHEMA_VERSION;
   payload: PersistedAttentionState;
+};
+
+type LegacyPersistedAttentionState = Omit<PersistedAttentionState, "meta">;
+
+type LegacyPersistedAttentionStateEnvelope = {
+  schemaVersion: typeof LEGACY_ATTENTION_STATE_SCHEMA_VERSION;
+  payload: LegacyPersistedAttentionState;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -91,6 +107,7 @@ export function createPersistedAttentionState(
       ledger: [...input.ledger],
       snapshot,
       review,
+      meta: createPersistedAttentionStateMeta(input.ledger),
     },
   };
 }
@@ -101,8 +118,39 @@ export function normalizePersistedAttentionState(
 ): PersistedAttentionState | null {
   const envelope = asRecord(value);
   if (!envelope) return null;
-  if (envelope.schemaVersion !== ATTENTION_STATE_SCHEMA_VERSION) return null;
+  const schemaVersion = envelope.schemaVersion;
 
+  if (schemaVersion === ATTENTION_STATE_SCHEMA_VERSION) {
+    return normalizePersistedAttentionStateV2(companyId, envelope as PersistedAttentionStateEnvelope);
+  }
+
+  if (schemaVersion === LEGACY_ATTENTION_STATE_SCHEMA_VERSION) {
+    return migratePersistedAttentionStateV1(companyId, envelope as LegacyPersistedAttentionStateEnvelope);
+  }
+
+  if (schemaVersion === undefined) {
+    return migrateLegacyPersistedAttentionState(companyId, envelope);
+  }
+
+  return null;
+}
+
+function createPersistedAttentionStateMeta(
+  ledger: AttentionLedger,
+  persistedAt = new Date().toISOString(),
+): PersistedAttentionStateMeta {
+  return {
+    persistedAt,
+    ledgerEntries: ledger.length,
+    eventEntries: ledger.filter((entry) => entry.kind === "event").length,
+    responseEntries: ledger.filter((entry) => entry.kind === "response").length,
+  };
+}
+
+function normalizePersistedAttentionStateV2(
+  companyId: string,
+  envelope: PersistedAttentionStateEnvelope,
+): PersistedAttentionState | null {
   const payload = asRecord(envelope.payload);
   if (!payload || payload.companyId !== companyId) return null;
 
@@ -119,5 +167,76 @@ export function normalizePersistedAttentionState(
     ledger,
     snapshot,
     review,
+    meta: normalizePersistedAttentionStateMeta(payload.meta, ledger),
   };
+}
+
+function migratePersistedAttentionStateV1(
+  companyId: string,
+  envelope: LegacyPersistedAttentionStateEnvelope,
+): PersistedAttentionState | null {
+  const payload = asRecord(envelope.payload);
+  if (!payload || payload.companyId !== companyId) return null;
+
+  const ledger = isAttentionLedger(payload.ledger) ? payload.ledger : createEmptyLedger();
+  const snapshot = normalizeAttentionSnapshot(companyId, payload.snapshot);
+  const review = isAttentionReviewState(payload.review, companyId)
+    ? payload.review
+    : createEmptyReviewState(companyId);
+
+  if (!snapshot) return null;
+
+  return {
+    companyId,
+    ledger,
+    snapshot,
+    review,
+    meta: createPersistedAttentionStateMeta(ledger),
+  };
+}
+
+function migrateLegacyPersistedAttentionState(
+  companyId: string,
+  payload: Record<string, unknown>,
+): PersistedAttentionState | null {
+  if (payload.companyId !== companyId) return null;
+
+  const ledger = isAttentionLedger(payload.ledger) ? payload.ledger : createEmptyLedger();
+  const snapshot = normalizeAttentionSnapshot(companyId, payload.snapshot);
+  const review = isAttentionReviewState(payload.review, companyId)
+    ? payload.review
+    : createEmptyReviewState(companyId);
+
+  if (!snapshot) return null;
+
+  return {
+    companyId,
+    ledger,
+    snapshot,
+    review,
+    meta: createPersistedAttentionStateMeta(ledger),
+  };
+}
+
+function normalizePersistedAttentionStateMeta(
+  value: unknown,
+  ledger: AttentionLedger,
+): PersistedAttentionStateMeta {
+  const meta = asRecord(value);
+  if (
+    meta
+    && typeof meta.persistedAt === "string"
+    && typeof meta.ledgerEntries === "number"
+    && typeof meta.eventEntries === "number"
+    && typeof meta.responseEntries === "number"
+  ) {
+    return {
+      persistedAt: meta.persistedAt,
+      ledgerEntries: meta.ledgerEntries,
+      eventEntries: meta.eventEntries,
+      responseEntries: meta.responseEntries,
+    };
+  }
+
+  return createPersistedAttentionStateMeta(ledger);
 }

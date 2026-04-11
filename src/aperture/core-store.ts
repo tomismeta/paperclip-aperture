@@ -30,6 +30,12 @@ type HostCacheEntry = {
   expiresAt: number;
 };
 
+type PersistenceStatus = {
+  state: "healthy" | "faulted";
+  updatedAt?: string;
+  lastError?: string;
+};
+
 type CompanySession = {
   core: ApertureCore;
   snapshot: AttentionSnapshot | null;
@@ -44,6 +50,7 @@ type CompanySession = {
   };
   hostCache: Map<string, HostCacheEntry>;
   hostDataRevision: number;
+  persistence: PersistenceStatus;
   lastTouchedAt: number;
 };
 
@@ -59,6 +66,7 @@ export class ApertureCompanyStore {
       trackedCompanies: this.sessions.size,
       maxCompanySessions: MAX_COMPANY_SESSIONS,
       idleSessionTtlMs: SESSION_IDLE_TTL_MS,
+      faultedCompanies: [...this.sessions.values()].filter((session) => session.persistence.state === "faulted").length,
     };
   }
 
@@ -86,32 +94,11 @@ export class ApertureCompanyStore {
       };
     }
 
-    const session = this.createSession(companyId);
-    session.ledger = [...input.ledger];
-    session.review = input.review ?? createEmptyReviewState(companyId);
-
-    if (input.ledger.length > 0) {
-      let lastSource: SnapshotSource | undefined;
-      let lastOccurredAt: string | undefined;
-      for (const entry of input.ledger) {
-        lastSource = entry.source;
-        lastOccurredAt = entry.occurredAt;
-        if (entry.kind === "event") {
-          session.core.publish(entry.apertureEvent);
-          session.eventCount += 1;
-        } else {
-          session.core.submit(entry.apertureResponse);
-        }
-      }
-      session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), lastSource, lastOccurredAt);
-    } else {
-      session.snapshot = input.snapshot ?? createAttentionSnapshot(companyId, session.core.getAttentionView());
-    }
-
+    const session = this.buildSession(companyId, input);
     this.sessions.set(companyId, session);
     this.pruneSessions();
     return {
-      snapshot: session.snapshot,
+      snapshot: session.snapshot ?? createAttentionSnapshot(companyId, session.core.getAttentionView()),
       review: session.review,
     };
   }
@@ -266,6 +253,43 @@ export class ApertureCompanyStore {
     };
   }
 
+  restore(
+    companyId: string,
+    input: {
+      ledger: AttentionLedger;
+      snapshot?: AttentionSnapshot | null;
+      review?: AttentionReviewState | null;
+    },
+  ): {
+    snapshot: AttentionSnapshot;
+    review: AttentionReviewState;
+  } {
+    const session = this.buildSession(companyId, input, this.sessions.get(companyId));
+    this.sessions.set(companyId, session);
+    return {
+      snapshot: session.snapshot ?? createAttentionSnapshot(companyId, session.core.getAttentionView()),
+      review: session.review,
+    };
+  }
+
+  markPersistenceHealthy(companyId: string): void {
+    const session = this.sessions.get(companyId);
+    if (!session) return;
+    session.persistence = {
+      state: "healthy",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  markPersistenceFault(companyId: string, error: string): void {
+    const session = this.ensureSession(companyId);
+    session.persistence = {
+      state: "faulted",
+      updatedAt: new Date().toISOString(),
+      lastError: error,
+    };
+  }
+
   appendLedgerEntry(companyId: string, entry: AttentionLedgerEntry): AttentionLedger {
     const session = this.ensureSession(companyId);
     session.ledger = [...session.ledger, entry];
@@ -338,26 +362,12 @@ export class ApertureCompanyStore {
 
   rebuildFromLedger(companyId: string, ledger: AttentionLedger): AttentionSnapshot {
     const previousReview = this.sessions.get(companyId)?.review ?? createEmptyReviewState(companyId);
-    const session = this.createSession(companyId);
-    session.ledger = [...ledger];
-    session.review = previousReview;
-
-    let lastSource: SnapshotSource | undefined;
-    let lastOccurredAt: string | undefined;
-    for (const entry of ledger) {
-      lastSource = entry.source;
-      lastOccurredAt = entry.occurredAt;
-      if (entry.kind === "event") {
-        session.core.publish(entry.apertureEvent);
-        session.eventCount += 1;
-      } else {
-        session.core.submit(entry.apertureResponse);
-      }
-    }
-
-    session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), lastSource, lastOccurredAt);
+    const session = this.buildSession(companyId, {
+      ledger,
+      review: previousReview,
+    }, this.sessions.get(companyId));
     this.sessions.set(companyId, session);
-    return session.snapshot;
+    return session.snapshot ?? createAttentionSnapshot(companyId, session.core.getAttentionView());
   }
 
   getCompanyCount(): number {
@@ -396,6 +406,52 @@ export class ApertureCompanyStore {
     return session;
   }
 
+  private buildSession(
+    companyId: string,
+    input: {
+      ledger: AttentionLedger;
+      snapshot?: AttentionSnapshot | null;
+      review?: AttentionReviewState | null;
+    },
+    previous?: CompanySession,
+  ): CompanySession {
+    const session = this.createSession(companyId);
+    session.ledger = [...input.ledger];
+    session.review = input.review ?? createEmptyReviewState(companyId);
+    session.approvals = {
+      records: previous?.approvals.records ? [...previous.approvals.records] : null,
+      dirty: previous?.approvals.dirty ?? true,
+    };
+    session.hostCache = previous ? new Map(previous.hostCache) : new Map<string, HostCacheEntry>();
+    session.hostDataRevision = previous?.hostDataRevision ?? 0;
+    session.persistence = previous?.persistence ?? healthyPersistenceStatus();
+    session.traces = previous ? [...previous.traces] : [];
+
+    if (input.ledger.length > 0) {
+      let lastSource: SnapshotSource | undefined;
+      let lastOccurredAt: string | undefined;
+      for (const entry of input.ledger) {
+        lastSource = entry.source;
+        lastOccurredAt = entry.occurredAt;
+        if (entry.kind === "event") {
+          session.core.publish(entry.apertureEvent);
+          session.eventCount += 1;
+        } else {
+          session.core.submit(entry.apertureResponse);
+        }
+      }
+      session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), lastSource, lastOccurredAt);
+    } else {
+      session.snapshot = input.snapshot ?? createAttentionSnapshot(companyId, session.core.getAttentionView());
+    }
+
+    session.persistence = previous?.persistence?.state === "faulted"
+      ? previous.persistence
+      : healthyPersistenceStatus();
+
+    return session;
+  }
+
   private createSession(companyId: string): CompanySession {
     const core = new ApertureCore();
     const now = Date.now();
@@ -413,6 +469,7 @@ export class ApertureCompanyStore {
       },
       hostCache: new Map<string, HostCacheEntry>(),
       hostDataRevision: 0,
+      persistence: healthyPersistenceStatus(),
       lastTouchedAt: now,
     };
 
@@ -482,4 +539,11 @@ function sameInteractionOrder(
 ): boolean {
   return left.length === right.length
     && left.every((frame, index) => frame.interactionId === right[index]?.interactionId);
+}
+
+function healthyPersistenceStatus(): PersistenceStatus {
+  return {
+    state: "healthy",
+    updatedAt: new Date().toISOString(),
+  };
 }

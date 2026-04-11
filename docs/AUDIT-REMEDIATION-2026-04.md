@@ -219,6 +219,35 @@ Key files:
 - `package.json`
 - `src/host/paperclip-approvals.ts`
 
+### 15. Durable State Rollback And Persistence Health
+
+Failed mutations now restore the last durable attention envelope instead of blindly replaying whatever happens to be in memory, and worker health exposes whether any company session is in a faulted persistence state.
+
+Why it matters:
+
+- reconciled-only frames no longer disappear if a local write fails mid-flight
+- operators and reviewers now have an explicit signal when persistence is unhealthy
+
+Key files:
+
+- `src/handlers/shared.ts`
+- `src/aperture/core-store.ts`
+- `tests/plugin.spec.ts`
+
+### 16. Persisted State Migration Path
+
+The composite attention envelope now has an explicit migration path from earlier schema versions instead of treating versioning as a single constant and a shrug.
+
+Why it matters:
+
+- future state format changes have a place to land cleanly
+- older persisted envelopes can be upgraded instead of silently dropped
+
+Key files:
+
+- `src/aperture/persisted-state.ts`
+- `tests/persisted-state.spec.ts`
+
 ## Value Received
 
 This pass produced five concrete gains:
@@ -238,7 +267,7 @@ This pass produced five concrete gains:
 
 5. **A more reviewable codebase**
    The system is easier to explain:
-   worker owns state and host adaptation, Core owns judgment, UI owns presentation.
+   worker owns state and host adaptation, Core owns continuity and attention mechanics, UI owns presentation.
 
 ## Immediate User-Facing Follow-Up
 
