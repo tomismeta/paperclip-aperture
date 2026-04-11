@@ -88,6 +88,48 @@ export type AttentionCoreDiagnostics = {
   };
 };
 
+export type AttentionOverlayLane = "now" | "next" | "ambient";
+export type AttentionOverlayStage = "core" | "reconciled" | "display";
+
+export type AttentionOverlayChange = {
+  stage: Exclude<AttentionOverlayStage, "core">;
+  kind: "introduced" | "removed" | "moved";
+  fromLane: AttentionOverlayLane | null;
+  toLane: AttentionOverlayLane | null;
+};
+
+export type AttentionOverlayFrameReport = {
+  taskId: string;
+  title: string;
+  entityType?: string;
+  interactionIds: Partial<Record<AttentionOverlayStage, string>>;
+  lanePath: Record<AttentionOverlayStage, AttentionOverlayLane | null>;
+  canonicalSource: "core" | "reconciled" | "display_overlay";
+  overlayKind?: "approval_overlay" | "display_overlay";
+  liveReconciled?: boolean;
+  attentionRationale: string[];
+  matchedRuleIds: string[];
+  relationHintKinds: string[];
+  changes: AttentionOverlayChange[];
+};
+
+export type AttentionOverlayDiagnostics = {
+  generatedAt: string;
+  summary: {
+    coreFrames: number;
+    reconciledFrames: number;
+    displayFrames: number;
+    introducedByReconciliation: number;
+    removedByReconciliation: number;
+    movedByReconciliation: number;
+    introducedByDisplayOverlay: number;
+    removedByDisplayOverlay: number;
+    movedByDisplayOverlay: number;
+    approvalOverlayFrames: number;
+  };
+  frames: AttentionOverlayFrameReport[];
+};
+
 export type AttentionExport = {
   companyId: string;
   exportedAt: string;
@@ -109,6 +151,7 @@ export type AttentionExport = {
   displaySnapshot: AttentionSnapshot;
   review: AttentionReviewState;
   coreDiagnostics: AttentionCoreDiagnostics;
+  overlayDiagnostics: AttentionOverlayDiagnostics;
 };
 
 export type AttentionDisplayPayload = {

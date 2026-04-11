@@ -101,6 +101,7 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
       updatedAt,
     },
     metadata: {
+      entityType: "approval",
       approvalStatus: record.status,
       approvalType: record.type,
       attention: {

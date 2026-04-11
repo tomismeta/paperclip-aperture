@@ -343,6 +343,22 @@ Key files:
 - `src/ui/use-focus-page-actions.ts`
 - `tests/plugin.spec.ts`
 
+### 23. Inspectable Host Overlay Diagnostics
+
+The worker now exports a typed overlay report that compares the raw Core snapshot, the reconciled host-policy snapshot, and the final display snapshot.
+
+Why it matters:
+
+- reviewers can now see exactly what the plugin added, removed, or moved across `core -> reconciled -> display`
+- the plugin's Paperclip-specific overlay stays explicit instead of hiding inside a fuzzy "smart attention engine" story
+
+Key files:
+
+- `src/aperture/overlay-diagnostics.ts`
+- `src/handlers/data.ts`
+- `src/aperture/types.ts`
+- `tests/plugin.spec.ts`
+
 ## Value Received
 
 This pass produced five concrete gains:

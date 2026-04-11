@@ -5,6 +5,7 @@ import manifest from "../src/manifest.js";
 import type {
   AttentionCoreDiagnostics,
   AttentionExport,
+  AttentionOverlayDiagnostics,
   AttentionReplayScenario,
   AttentionReviewState,
   AttentionSnapshot,
@@ -1287,6 +1288,7 @@ describe("paperclip aperture", () => {
     expect(beforeResponse.traces.length).toBeGreaterThan(0);
     expect(beforeResponse.reconciledSnapshot.now?.title).toBe("Approve launch cutover");
     expect(beforeResponse.displaySnapshot.now?.title).toBe("Approve launch cutover");
+    expect(beforeResponse.overlayDiagnostics.summary.coreFrames).toBeGreaterThanOrEqual(1);
 
     await harness.performAction("acknowledge-frame", {
       companyId: "company-export",
@@ -1405,6 +1407,71 @@ describe("paperclip aperture", () => {
 
     expect(display.snapshot.now?.taskId).toBe("approval:approval-1");
     expect(display.snapshot.now?.title).toBe("Approve launch cutover");
+  });
+
+  it("surfaces approval overlay diagnostics for worker-merged display frames", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, [createApprovalRecord({ companyId: "company-overlay-display" })]);
+
+    const diagnostics = await harness.getData<AttentionOverlayDiagnostics>("attention-overlay-diagnostics", {
+      companyId: "company-overlay-display",
+    });
+    expect(diagnostics.summary.introducedByDisplayOverlay).toBe(1);
+    expect(diagnostics.summary.approvalOverlayFrames).toBe(1);
+    expect(diagnostics.frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: "approval:approval-1",
+        canonicalSource: "display_overlay",
+        overlayKind: "approval_overlay",
+        lanePath: {
+          core: null,
+          reconciled: null,
+          display: "now",
+        },
+        changes: expect.arrayContaining([
+          expect.objectContaining({
+            stage: "display",
+            kind: "introduced",
+            toLane: "now",
+          }),
+        ]),
+      }),
+    ]));
+  });
+
+  it("surfaces reconciled host-policy diagnostics for live issue candidates", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, []);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [createIssueComment()],
+    });
+
+    const diagnostics = await harness.getData<AttentionOverlayDiagnostics>("attention-overlay-diagnostics", {
+      companyId: "company-live",
+    });
+    expect(diagnostics.summary.introducedByReconciliation).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.frames).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: "issue:issue-1",
+        canonicalSource: "reconciled",
+        liveReconciled: true,
+        lanePath: {
+          core: null,
+          reconciled: "now",
+          display: "now",
+        },
+        changes: expect.arrayContaining([
+          expect.objectContaining({
+            stage: "reconciled",
+            kind: "introduced",
+            toLane: "now",
+          }),
+        ]),
+      }),
+    ]));
   });
 
   it("reuses cached display reconciliation until an invalidating activity event arrives", async () => {

@@ -5,11 +5,13 @@ import {
   isAttentionReviewState,
 } from "../aperture/persisted-state.js";
 import { loadReconciledCandidates } from "../aperture/reconciliation.js";
+import { buildOverlayDiagnostics } from "../aperture/overlay-diagnostics.js";
 import { mergeStoredFrames } from "../aperture/frame-model.js";
 import {
   type AttentionCoreDiagnostics,
   type AttentionDisplayPayload,
   type AttentionExport,
+  type AttentionOverlayDiagnostics,
   createEmptyLedger,
   createEmptyReviewState,
   createEmptySnapshot,
@@ -324,6 +326,17 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
     return store.getCoreDiagnostics(companyId) ?? emptyCoreDiagnostics(new Date().toISOString());
   });
 
+  ctx.data.register("attention-overlay-diagnostics", async (params) => {
+    const companyId = requireCompanyId(params);
+    const { snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
+    const { reconciledSnapshot, displaySnapshot } = await loadDisplaySnapshot(ctx, store, companyId, snapshot, reviewState);
+    return buildOverlayDiagnostics({
+      snapshot,
+      reconciledSnapshot,
+      displaySnapshot,
+    }) satisfies AttentionOverlayDiagnostics;
+  });
+
   ctx.data.register("attention-summary", async (params) => {
     const companyId = requireCompanyId(params);
     const { snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
@@ -380,6 +393,11 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       displaySnapshot,
       review: reviewState,
       coreDiagnostics: store.getCoreDiagnostics(companyId) ?? emptyCoreDiagnostics(exportedAt),
+      overlayDiagnostics: buildOverlayDiagnostics({
+        snapshot,
+        reconciledSnapshot,
+        displaySnapshot,
+      }),
     } satisfies AttentionExport;
   });
 
