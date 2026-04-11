@@ -294,6 +294,23 @@ Key files:
 - `src/handlers/shared.ts`
 - `tests/plugin.spec.ts`
 
+### 20. Contributor Guardrails And CI Budgets
+
+The repo now has a first-class `verify` pipeline, explicit bundle-size budgets, a dependency-review workflow for pull requests, and a contributor guide that documents the Paperclip/Core boundary directly.
+
+Why it matters:
+
+- the repo now enforces more of the expectations a reviewer would otherwise have to infer
+- operational hygiene is less dependent on maintainer memory during release and review
+
+Key files:
+
+- `package.json`
+- `scripts/check-bundle-size.ts`
+- `.github/workflows/ci.yml`
+- `.github/workflows/dependency-review.yml`
+- `CONTRIBUTING.md`
+
 ## Value Received
 
 This pass produced five concrete gains:

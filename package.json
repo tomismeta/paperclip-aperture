@@ -19,15 +19,18 @@
   ],
   "scripts": {
     "build": "tsx ./esbuild.config.ts",
+    "check:bundle-size": "tsx ./scripts/check-bundle-size.ts",
+    "clean": "find . -name .DS_Store -delete && rm -rf dist tmp *.tgz",
     "dev": "tsx ./esbuild.config.ts --watch",
     "dev:ui": "paperclip-plugin-dev-server --root . --ui-dir dist/ui --port 4177",
     "demo:record": "tsx ./scripts/demo/capture.ts",
     "eval:issue-intelligence": "tsx ./scripts/eval-issue-intelligence.ts",
-    "clean": "rm -rf dist tmp *.tgz",
+    "pack:check": "npm pack --dry-run",
     "prepack": "pnpm build",
-    "release:check": "pnpm typecheck && pnpm test && pnpm build && npm pack --dry-run",
+    "release:check": "pnpm verify && pnpm pack:check",
     "test": "vitest run --config ./vitest.config.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify": "pnpm typecheck && pnpm test && pnpm eval:issue-intelligence && pnpm build && pnpm check:bundle-size"
   },
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",
