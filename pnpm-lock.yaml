@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@paperclipai/plugin-sdk':
-        specifier: 2026.403.0
-        version: 2026.403.0(react@19.2.4)
+        specifier: 2026.416.0
+        version: 2026.416.0(react@19.2.4)
       '@tomismeta/aperture-core':
-        specifier: 0.6.0
-        version: 0.6.0
+        specifier: 0.7.0
+        version: 0.7.0
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -210,8 +210,8 @@ packages:
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
-  '@paperclipai/plugin-sdk@2026.403.0':
-    resolution: {integrity: sha512-8WmsX1rGk1ubG41l26pvEyuaLBQgdWQ/s3QL9XMU3rcwItkMKGhopy9b4uPbwJMMv3gbRiaXRa2JJz3e+P3OgA==}
+  '@paperclipai/plugin-sdk@2026.416.0':
+    resolution: {integrity: sha512-P/KAqkDXeqA4OS8krqsbwiv2yvno5AgOhto/YAXn0yloQV2jprhsOZzXru64u4cGdohm/fRAky7iPPi7SspJ5A==}
     hasBin: true
     peerDependencies:
       react: '>=18'
@@ -219,8 +219,8 @@ packages:
       react:
         optional: true
 
-  '@paperclipai/shared@2026.403.0':
-    resolution: {integrity: sha512-wAwG5Bv0JEg0Itqf41niH5hAyV/aDA7n5ZRlHdMfmfMA4pcLKxZUyRhduFVJvgHtAW3UJwR/QA2rGQxxrzJrTw==}
+  '@paperclipai/shared@2026.416.0':
+    resolution: {integrity: sha512-ORG3f8X1Z4m/K4rbIlWP16UqPWlGSTiFtCAQajDddclY+b/Ubfn0M6Xh54+zkjy1TGVePnLGuif8EKDkX5Sb4g==}
 
   '@rollup/rollup-android-arm-eabi@4.59.0':
     resolution: {integrity: sha512-upnNBkA6ZH2VKGcBj9Fyl9IGNPULcjXRlg0LLeaioQWueH30p6IXtJEbKAgvyv+mJaMxSm1l6xwDXYjpEMiLMg==}
@@ -360,8 +360,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@tomismeta/aperture-core@0.6.0':
-    resolution: {integrity: sha512-vr8fKz+eyg6f8/pV/UaS0MYSlr6jTCAwWsDDfLM3H1eMeoA73H6NLF/avwoY3QM0bjbfsrCksFOz+u+xJXG0Lw==}
+  '@tomismeta/aperture-core@0.7.0':
+    resolution: {integrity: sha512-B8pQ9r3BUH7qONn49Xf+uumgqhJi+Qz4j8NEb0LehhhN89AVsgXKhH5hly9hmMYFaDJu/X8DVFMpqjSPDz8gew==}
     engines: {node: '>=18'}
 
   '@types/chai@5.2.3':
@@ -764,14 +764,14 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@paperclipai/plugin-sdk@2026.403.0(react@19.2.4)':
+  '@paperclipai/plugin-sdk@2026.416.0(react@19.2.4)':
     dependencies:
-      '@paperclipai/shared': 2026.403.0
+      '@paperclipai/shared': 2026.416.0
       zod: 3.25.76
     optionalDependencies:
       react: 19.2.4
 
-  '@paperclipai/shared@2026.403.0':
+  '@paperclipai/shared@2026.416.0':
     dependencies:
       zod: 3.25.76
 
@@ -850,7 +850,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.59.0':
     optional: true
 
-  '@tomismeta/aperture-core@0.6.0': {}
+  '@tomismeta/aperture-core@0.7.0': {}
 
   '@types/chai@5.2.3':
     dependencies:
