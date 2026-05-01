@@ -582,3 +582,78 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
       return null;
   }
 }
+
+function semanticHintsFromMappedEvent(event: ApertureEvent): SourceEvent["semanticHints"] | undefined {
+  const hints = {
+    ...(event.semantic?.confidence ? { confidence: event.semantic.confidence } : {}),
+    ...(event.semantic?.relationHints?.length ? { relationHints: event.semantic.relationHints } : {}),
+    ...(event.semantic?.whyNow ? { whyNow: event.semantic.whyNow } : {}),
+    ...(event.semantic?.factors?.length ? { factors: event.semantic.factors } : {}),
+    ...(event.semantic?.intentFrame ? { intentFrame: event.semantic.intentFrame } : {}),
+  };
+
+  return Object.keys(hints).length > 0 ? hints : undefined;
+}
+
+export function mapPluginEventToSourceEvent(event: MappablePluginEvent): SourceEvent | null {
+  const mapped = mapPluginEventToAperture(event);
+  if (!mapped) return null;
+
+  const base = {
+    id: mapped.id,
+    taskId: mapped.taskId,
+    timestamp: mapped.timestamp,
+    source: mapped.source,
+    semanticHints: semanticHintsFromMappedEvent(mapped),
+  };
+
+  switch (mapped.type) {
+    case "task.started":
+      return {
+        ...base,
+        type: "task.started",
+        title: mapped.title,
+        ...(mapped.summary ? { summary: mapped.summary } : {}),
+      };
+    case "task.updated":
+      return {
+        ...base,
+        type: "task.updated",
+        title: mapped.title,
+        ...(mapped.summary ? { summary: mapped.summary } : {}),
+        ...(mapped.toolFamily ? { toolFamily: mapped.toolFamily } : {}),
+        ...(mapped.activityClass ? { activityClass: mapped.activityClass } : {}),
+        status: mapped.status,
+        ...(typeof mapped.progress === "number" ? { progress: mapped.progress } : {}),
+        ...(mapped.context ? { context: mapped.context } : {}),
+      };
+    case "human.input.requested":
+      return {
+        ...base,
+        type: "human.input.requested",
+        interactionId: mapped.interactionId,
+        ...(mapped.toolFamily ? { toolFamily: mapped.toolFamily } : {}),
+        ...(mapped.activityClass ? { activityClass: mapped.activityClass } : {}),
+        title: mapped.title,
+        summary: mapped.summary,
+        request: mapped.request,
+        ...(mapped.context ? { context: mapped.context } : {}),
+        ...(mapped.provenance ? { provenance: mapped.provenance } : {}),
+        ...(mapped.consequence ? { riskHint: mapped.consequence } : {}),
+      };
+    case "task.completed":
+      return {
+        ...base,
+        type: "task.completed",
+        ...(mapped.summary ? { summary: mapped.summary } : {}),
+      };
+    case "task.cancelled":
+      return {
+        ...base,
+        type: "task.cancelled",
+        ...(mapped.reason ? { reason: mapped.reason } : {}),
+      };
+    default:
+      return null;
+  }
+}

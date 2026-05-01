@@ -1,9 +1,10 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
+import type { AttentionSignal } from "@tomismeta/aperture-core";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import { readFocusMetadata } from "../aperture/contracts.js";
 import { mapDecisionToResponse } from "../aperture/response-mapper.js";
 import { parseTaskId, taskIdMatchesKind, taskKind } from "../aperture/task-ref.js";
-import { createEmptyReviewState, createEmptySnapshot, type AttentionLedgerResponseEntry, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "../aperture/types.js";
+import { createEmptyReviewState, createEmptySnapshot, type AttentionLedgerOverlayResponseEntry, type AttentionLedgerResponseEntry, type AttentionLedgerSignalEntry, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "../aperture/types.js";
 import { submitApprovalDecision } from "../host/paperclip-approvals.js";
 import {
   emitAttentionUpdate,
@@ -77,6 +78,39 @@ function laneForTask(snapshot: AttentionSnapshot | null, taskId: string): "now" 
   return "ui_only";
 }
 
+function createSignalLedgerEntry(input: {
+  taskId: string;
+  interactionId: string;
+  occurredAt?: string;
+  sourceEventType: string;
+  sourceEntityId?: string;
+  signal: {
+    kind: AttentionSignal["kind"];
+    surface?: string;
+    section?: string;
+    timeoutMs?: number;
+    metadata?: Record<string, unknown>;
+  };
+}): AttentionLedgerSignalEntry {
+  const occurredAt = input.occurredAt ?? new Date().toISOString();
+  return {
+    kind: "signal",
+    id: `${input.taskId}:${input.signal.kind}:${occurredAt}`,
+    occurredAt,
+    source: {
+      eventType: input.sourceEventType,
+      entityId: input.sourceEntityId ?? input.taskId,
+      entityType: entityTypeFromTaskId(input.taskId),
+    },
+    apertureSignal: {
+      ...input.signal,
+      taskId: input.taskId,
+      interactionId: input.interactionId,
+      timestamp: occurredAt,
+    } as AttentionSignal,
+  };
+}
+
 function focusDimensions(
   snapshot: AttentionSnapshot | null,
   taskId: string,
@@ -131,7 +165,19 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       : "focus";
 
     const currentSnapshot = store.getSnapshot(companyId);
-    const { snapshot, changed } = store.markViewed(companyId, taskId, interactionId, { surface });
+    const signalEntry = createSignalLedgerEntry({
+      taskId,
+      interactionId,
+      sourceEventType: "plugin.local.viewed",
+      signal: {
+        kind: "viewed",
+        surface,
+      },
+    });
+    const { snapshot, changed } = await runAttentionMutation(ctx, store, companyId, () => {
+      const { ledger, snapshot, changed } = store.applySignal(companyId, signalEntry);
+      return { ledger, snapshot, changed };
+    });
 
     if (changed) {
       emitAttentionUpdate(ctx, {
@@ -163,14 +209,51 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       : "operator_interaction";
 
     const currentSnapshot = store.getSnapshot(companyId);
-    const { snapshot, changed } = store.engage(companyId, taskId, interactionId, { durationMs });
-    store.markViewed(companyId, taskId, interactionId, { surface: "focus" });
-    if (reason === "show_context" || reason === "comment_compose") {
-      store.markContextExpanded(companyId, taskId, interactionId, {
-        surface: "focus",
-        section: reason === "show_context" ? "now_context" : "comment_compose",
-      });
-    }
+    const occurredAt = new Date().toISOString();
+    const signalEntries = [
+      createSignalLedgerEntry({
+        taskId,
+        interactionId,
+        occurredAt,
+        sourceEventType: "plugin.local.engage.viewed",
+        signal: {
+          kind: "viewed",
+          surface: "focus",
+        },
+      }),
+      ...(reason === "show_context" || reason === "comment_compose"
+        ? [
+            createSignalLedgerEntry({
+              taskId,
+              interactionId,
+              occurredAt,
+              sourceEventType: "plugin.local.engage.context_expanded",
+              signal: {
+                kind: "context_expanded",
+                surface: "focus",
+                section: reason === "show_context" ? "now_context" : "comment_compose",
+              },
+            }),
+          ]
+        : []),
+    ];
+    const { snapshot, changed } = await runAttentionMutation(ctx, store, companyId, () => {
+      const engaged = store.engage(companyId, taskId, interactionId, { durationMs });
+      let ledger = store.getLedger(companyId);
+      let latestSnapshot = engaged.snapshot;
+      let signalChanged = false;
+      for (const entry of signalEntries) {
+        const result = store.applySignal(companyId, entry);
+        ledger = result.ledger;
+        latestSnapshot = result.snapshot;
+        signalChanged ||= result.changed;
+      }
+      return {
+        ledger,
+        snapshot: latestSnapshot,
+        changed: engaged.changed || signalChanged,
+      };
+    });
 
     if (changed) {
       emitAttentionUpdate(ctx, {
@@ -332,9 +415,21 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
         return { ledger, snapshot, review };
       }
 
+      const overlayEntry: AttentionLedgerOverlayResponseEntry = {
+        kind: "overlay-response",
+        id: ledgerEntry.id,
+        occurredAt: ledgerEntry.occurredAt,
+        source: ledgerEntry.source,
+        apertureResponse: ledgerEntry.apertureResponse,
+        overlay: {
+          kind: "approval_overlay",
+          reason: "Approval frame came from the Paperclip approvals display adapter, not the replayed Core snapshot.",
+        },
+      };
+      const { ledger, snapshot } = store.applyOverlayResponse(companyId, overlayEntry);
       return {
-        ledger: store.getLedger(companyId),
-        snapshot: currentSnapshot ?? createEmptySnapshot(companyId),
+        ledger,
+        snapshot,
         review,
       };
     });

@@ -1,10 +1,12 @@
 import type {
   ApertureCore,
   ApertureEvent,
+  AttentionSignal,
   AttentionFrame,
   AttentionResponse,
   AttentionSurfaceCapabilities,
   AttentionView,
+  SourceEvent,
 } from "@tomismeta/aperture-core";
 import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
 
@@ -62,6 +64,7 @@ export type AttentionLedgerEventEntry = {
   id: string;
   occurredAt: string;
   source: SnapshotSource;
+  sourceEvent?: SourceEvent;
   apertureEvent: ApertureEvent;
 };
 
@@ -73,7 +76,31 @@ export type AttentionLedgerResponseEntry = {
   apertureResponse: AttentionResponse;
 };
 
-export type AttentionLedgerEntry = AttentionLedgerEventEntry | AttentionLedgerResponseEntry;
+export type AttentionLedgerOverlayResponseEntry = {
+  kind: "overlay-response";
+  id: string;
+  occurredAt: string;
+  source: SnapshotSource;
+  apertureResponse: AttentionResponse;
+  overlay: {
+    kind: "approval_overlay" | "display_overlay";
+    reason: string;
+  };
+};
+
+export type AttentionLedgerSignalEntry = {
+  kind: "signal";
+  id: string;
+  occurredAt: string;
+  source: SnapshotSource;
+  apertureSignal: AttentionSignal;
+};
+
+export type AttentionLedgerEntry =
+  | AttentionLedgerEventEntry
+  | AttentionLedgerResponseEntry
+  | AttentionLedgerOverlayResponseEntry
+  | AttentionLedgerSignalEntry;
 export type AttentionLedger = AttentionLedgerEntry[];
 
 export type AttentionCoreDiagnostics = {
@@ -88,6 +115,23 @@ export type AttentionCoreDiagnostics = {
   globalSignalSummary: ReturnType<ApertureCore["getSignalSummary"]>;
   globalAttentionState: ReturnType<ApertureCore["getAttentionState"]>;
   memoryProfile: ReturnType<ApertureCore["snapshotMemoryProfile"]>;
+  ledger: {
+    entries: number;
+    eventEntries: number;
+    responseEntries: number;
+    overlayResponseEntries: number;
+    signalEntries: number;
+    replayStrategy: "full-ledger";
+    compactionRecommended: boolean;
+  };
+  host: {
+    cacheEntries: number;
+    hostDataRevision: number;
+    approvalRecords: number;
+    approvalsDirty: boolean;
+    approvalAdapterLastLoadedAt?: string;
+    approvalAdapterLastError?: string;
+  };
   currentNowTask: null | {
     taskId: string;
     interactionId: string;
@@ -118,6 +162,13 @@ export type AttentionOverlayFrameReport = {
   attentionRationale: string[];
   matchedRuleIds: string[];
   relationHintKinds: string[];
+  decision?: {
+    owner?: "aperture_core" | "paperclip_reconciliation" | "approval_overlay" | "display_merge";
+    lane?: AttentionOverlayLane;
+    sourcePolicy?: string;
+    rationale?: string[];
+    promotedFromLane?: "next" | "ambient";
+  };
   changes: AttentionOverlayChange[];
 };
 
@@ -144,6 +195,8 @@ export type AttentionExport = {
   ledger: AttentionLedger;
   eventEntries: AttentionLedgerEventEntry[];
   responseEntries: AttentionLedgerResponseEntry[];
+  overlayResponseEntries: AttentionLedgerOverlayResponseEntry[];
+  signalEntries: AttentionLedgerSignalEntry[];
   traces: ApertureTrace[];
   window: {
     entryLimit: number;
@@ -177,6 +230,17 @@ export type AttentionReplayScenarioStep =
   | {
       kind: "submit";
       response: AttentionResponse;
+      label?: string;
+    }
+  | {
+      kind: "signal";
+      signal: AttentionSignal;
+      label?: string;
+    }
+  | {
+      kind: "overlay-response";
+      response: AttentionResponse;
+      overlay: AttentionLedgerOverlayResponseEntry["overlay"];
       label?: string;
     };
 

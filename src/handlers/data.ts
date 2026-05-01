@@ -19,8 +19,10 @@ import {
   normalizeAttentionSnapshot,
   type AttentionLedger,
   type AttentionLedgerEventEntry,
+  type AttentionLedgerOverlayResponseEntry,
   type AttentionReplayScenario,
   type AttentionLedgerResponseEntry,
+  type AttentionLedgerSignalEntry,
   type AttentionReviewState,
   type AttentionSnapshot,
 } from "../aperture/types.js";
@@ -77,6 +79,21 @@ function emptyCoreDiagnostics(exportedAt: string): AttentionCoreDiagnostics {
       operatorId: "unknown",
       updatedAt: exportedAt,
       sessionCount: 0,
+    },
+    ledger: {
+      entries: 0,
+      eventEntries: 0,
+      responseEntries: 0,
+      overlayResponseEntries: 0,
+      signalEntries: 0,
+      replayStrategy: "full-ledger",
+      compactionRecommended: false,
+    },
+    host: {
+      cacheEntries: 0,
+      hostDataRevision: 0,
+      approvalRecords: 0,
+      approvalsDirty: false,
     },
     currentNowTask: null,
   };
@@ -136,7 +153,7 @@ function deriveReviewStateFromLedger(
     : createEmptyReviewState(companyId);
 
   for (const entry of ledger) {
-    if (entry.kind !== "response") continue;
+    if (entry.kind !== "response" && entry.kind !== "overlay-response") continue;
 
     const occurredAt = entry.occurredAt;
     const taskId = entry.apertureResponse.taskId;
@@ -281,9 +298,11 @@ async function loadWorkerApprovals(
     const approvals = await listPendingApprovals(ctx, companyId, config);
     return store.setApprovals(companyId, approvals);
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    store.markApprovalAdapterFailure(companyId, message);
     ctx.logger.warn("Failed to load pending approvals for Focus display", {
       companyId,
-      error: error instanceof Error ? error.message : String(error),
+      error: message,
     });
     if (cached) return cached;
     return store.setApprovals(companyId, []);
@@ -319,6 +338,8 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       maxCompanySessions: health.maxCompanySessions,
       idleSessionTtlMs: health.idleSessionTtlMs,
       faultedCompanies: health.faultedCompanies,
+      hostCacheEntries: health.hostCacheEntries,
+      cachedReconciliations: health.cachedReconciliations,
     };
   });
 
@@ -380,6 +401,8 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
       ledger: ledgerWindow.items,
       eventEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerEventEntry => entry.kind === "event"),
       responseEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerResponseEntry => entry.kind === "response"),
+      overlayResponseEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerOverlayResponseEntry => entry.kind === "overlay-response"),
+      signalEntries: ledgerWindow.items.filter((entry): entry is AttentionLedgerSignalEntry => entry.kind === "signal"),
       traces: traceWindow.items,
       window: {
         entryLimit,
@@ -443,11 +466,24 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
               event: entry.apertureEvent,
               label: `${entry.source.eventType} @ ${entry.occurredAt}`,
             }
-          : {
+          : entry.kind === "response"
+            ? {
               kind: "submit" as const,
               response: entry.apertureResponse,
               label: `${entry.source.eventType} @ ${entry.occurredAt}`,
             }
+            : entry.kind === "signal"
+              ? {
+                  kind: "signal" as const,
+                  signal: entry.apertureSignal,
+                  label: `${entry.source.eventType} @ ${entry.occurredAt}`,
+                }
+              : {
+                  kind: "overlay-response" as const,
+                  response: entry.apertureResponse,
+                  overlay: entry.overlay,
+                  label: `${entry.source.eventType} @ ${entry.occurredAt}`,
+                }
       )),
     } satisfies AttentionReplayScenario;
   });

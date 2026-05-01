@@ -1,4 +1,5 @@
 import type { AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "./types.js";
+import { withFocusDecisionMetadata } from "./contracts.js";
 
 export type FrameLane = "now" | "next" | "ambient";
 
@@ -135,10 +136,22 @@ export function mergeStoredFrames(
     (candidate) => !isAmbientExpired(candidate.frame, base.updatedAt, nowIso),
   );
 
-  const nowCandidate = explicitNow.shift() ?? explicitNext.shift() ?? null;
+  const nowCandidateFromExplicitNow = explicitNow.shift() ?? null;
+  const promotedNextCandidate = nowCandidateFromExplicitNow ? null : explicitNext.shift() ?? null;
+  const nowCandidate = nowCandidateFromExplicitNow ?? promotedNextCandidate;
   const next = [...explicitNow, ...explicitNext].map((candidate) => candidate.frame);
   const ambientFrames = ambient.map((candidate) => candidate.frame);
-  const now = nowCandidate?.frame ?? null;
+  const now = promotedNextCandidate
+    ? withFocusDecisionMetadata(promotedNextCandidate.frame, {
+        owner: "display_merge",
+        lane: "now",
+        sourcePolicy: "mergeStoredFrames.promoteNextWhenNowEmpty",
+        promotedFromLane: "next",
+        rationale: [
+          "No explicit now candidate was available, so the highest next candidate became the active focus.",
+        ],
+      })
+    : nowCandidate?.frame ?? null;
 
   return attachReviewState({
     ...base,

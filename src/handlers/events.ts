@@ -1,6 +1,7 @@
 import type { PluginContext, PluginEvent } from "@paperclipai/plugin-sdk";
+import { normalizeSourceEvent } from "@tomismeta/aperture-core/semantic";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
-import { mapPluginEventToAperture } from "../aperture/event-mapper.js";
+import { mapPluginEventToAperture, mapPluginEventToSourceEvent } from "../aperture/event-mapper.js";
 import type { AttentionLedgerEventEntry } from "../aperture/types.js";
 import { emitAttentionUpdate, runAttentionMutation } from "./shared.js";
 
@@ -106,7 +107,10 @@ async function handleEvent(
 
     if (entityType === "issue" && action && ATTENTION_ACTIVITY_ACTIONS.has(action)) {
       store.invalidateHostCache(event.companyId, {
-        keys: event.entityId ? [`issue:${event.entityId}:documents`] : [],
+        keys: event.entityId ? [
+          `issue:${event.entityId}:documents`,
+          `issue:${event.entityId}:relations`,
+        ] : [],
         prefixes: [
           "issues:blocked",
           "issues:in_review",
@@ -139,6 +143,7 @@ async function handleEvent(
       keys: [
         `issue:${event.entityId}:detail`,
         `issue:${event.entityId}:comments`,
+        `issue:${event.entityId}:relations`,
       ],
       prefixes: ["issues:blocked", "issues:in_review"],
     });
@@ -149,7 +154,8 @@ async function handleEvent(
   }
 
   const enriched = await enrichIssuePayload(ctx, store, event);
-  const mapped = mapPluginEventToAperture(enriched);
+  const sourceEvent = mapPluginEventToSourceEvent(enriched);
+  const mapped = sourceEvent ? normalizeSourceEvent(sourceEvent) : mapPluginEventToAperture(enriched);
   if (!mapped) return;
 
   if (enriched.entityType === "approval") {
@@ -165,6 +171,7 @@ async function handleEvent(
       entityId: enriched.entityId,
       entityType: enriched.entityType,
     },
+    ...(sourceEvent ? { sourceEvent } : {}),
     apertureEvent: mapped,
   };
 

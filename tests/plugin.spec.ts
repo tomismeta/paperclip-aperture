@@ -19,6 +19,8 @@ import {
 } from "../src/handlers/shared.js";
 
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
+type IssueRelationSummary = Awaited<ReturnType<PluginIssuesClient["relations"]["get"]>>;
+type IssueRelationIssueSummary = IssueRelationSummary["blockedBy"][number];
 
 function createIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -116,6 +118,19 @@ function createIssueDocumentSummary(overrides: Partial<IssueDocumentSummary> = {
     updatedByUserId: "user-1",
     createdAt: new Date("2026-03-19T10:00:00.000Z"),
     updatedAt: new Date("2026-03-19T10:15:00.000Z"),
+    ...overrides,
+  };
+}
+
+function createIssueRelationSummary(overrides: Partial<IssueRelationIssueSummary> = {}): IssueRelationIssueSummary {
+  return {
+    id: "issue-blocker",
+    identifier: "CAM-8",
+    title: "Finish rollout dependency",
+    status: "blocked",
+    priority: "high",
+    assigneeAgentId: null,
+    assigneeUserId: null,
     ...overrides,
   };
 }
@@ -298,6 +313,16 @@ describe("paperclip aperture", () => {
       companyId: "company-viewed-signal",
     });
     expect(diagnostics.currentNowTask?.signalSummary.counts.viewed).toBeGreaterThanOrEqual(1);
+    expect(diagnostics.ledger.signalEntries).toBeGreaterThanOrEqual(1);
+    const exported = await harness.getData<AttentionExport>("attention-export", { companyId: "company-viewed-signal" });
+    expect(exported.signalEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        apertureSignal: expect.objectContaining({
+          kind: "viewed",
+          surface: "focus",
+        }),
+      }),
+    ]));
     expect(harness.telemetry).toEqual(expect.arrayContaining([
       expect.objectContaining({
         eventName: "frame_viewed",
@@ -426,6 +451,7 @@ describe("paperclip aperture", () => {
       (entry) => entry.source.eventType === "issue.comment.created" && entry.source.entityId === "issue-100",
     );
 
+    expect(approvalEntry?.sourceEvent?.type).toBe("human.input.requested");
     expect(approvalEntry?.apertureEvent.semantic?.confidence).toBe("high");
     expect(approvalEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
       kind: "same_issue",
@@ -519,6 +545,15 @@ describe("paperclip aperture", () => {
 
     const review = await harness.getData<AttentionReviewState>("attention-review", { companyId: "company-approval-ui-only" });
     expect(review.frames["approval:approval-ui-only-1"]?.suppressedAt).toBeTruthy();
+
+    const exported = await harness.getData<AttentionExport>("attention-export", { companyId: "company-approval-ui-only" });
+    expect(exported.overlayResponseEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        overlay: expect.objectContaining({
+          kind: "approval_overlay",
+        }),
+      }),
+    ]));
 
     const summary = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-approval-ui-only" });
     expect(summary.counts.total).toBe(0);
@@ -715,6 +750,67 @@ describe("paperclip aperture", () => {
     expect(snapshot.now?.summary).toBe("Blocked issue waiting on clarification before work can continue.");
     expect(snapshot.now?.context?.items?.find((item) => item.id === "latest-comment")?.value).toContain("Need clarification");
     expect(snapshot.review?.unread.total).toBeGreaterThan(0);
+  });
+
+  it("surfaces Paperclip issue blocker relations as first-class focus context", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    mockApprovalApi(harness, []);
+
+    const blocker = createIssue({
+      id: "issue-blocker",
+      identifier: "CAM-8",
+      title: "Finish rollout dependency",
+      companyId: "company-relations",
+      status: "blocked",
+      priority: "high",
+    });
+    const blocked = createIssue({
+      id: "issue-blocked",
+      identifier: "CAM-9",
+      title: "Blocked rollout follow-up",
+      companyId: "company-relations",
+      blockedBy: [createIssueRelationSummary()],
+    });
+    harness.seed({
+      issues: [blocked, blocker],
+      issueComments: [
+        createIssueComment({
+          companyId: "company-relations",
+          issueId: "issue-blocked",
+        }),
+      ],
+    });
+
+    const display = await harness.getData<{ snapshot: AttentionSnapshot }>("attention-display", {
+      companyId: "company-relations",
+    });
+    const frames = [
+      ...(display.snapshot.now ? [display.snapshot.now] : []),
+      ...display.snapshot.next,
+      ...display.snapshot.ambient,
+    ];
+    const blockedFrame = frames.find((frame) => frame.taskId === "issue:issue-blocked");
+
+    expect(blockedFrame?.summary).toBe("CAM-8 Finish rollout dependency is a tracked blocker for this issue.");
+    expect(blockedFrame?.provenance?.whyNow).toBe("CAM-8 Finish rollout dependency is linked as a blocker in Paperclip.");
+    expect(blockedFrame?.provenance?.factors).toContain("blocked by issue relation");
+    expect(blockedFrame?.context?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "blocked-by",
+        value: "CAM-8 Finish rollout dependency",
+      }),
+    ]));
+    expect(blockedFrame?.metadata).toEqual(expect.objectContaining({
+      issueRelations: expect.objectContaining({
+        blockedBy: expect.arrayContaining([
+          expect.objectContaining({
+            id: "issue-blocker",
+            identifier: "CAM-8",
+          }),
+        ]),
+      }),
+    }));
   });
 
   it("reconciles blocked issues when host comment timestamps are ISO strings", async () => {
@@ -1426,6 +1522,10 @@ describe("paperclip aperture", () => {
         taskId: "approval:approval-1",
         canonicalSource: "display_overlay",
         overlayKind: "approval_overlay",
+        decision: expect.objectContaining({
+          owner: "display_merge",
+          promotedFromLane: "next",
+        }),
         lanePath: {
           core: null,
           reconciled: null,

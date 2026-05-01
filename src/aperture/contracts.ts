@@ -17,6 +17,16 @@ type IssueIntelligenceMetadata = {
   blockingTarget?: string | null;
 };
 
+export type FocusDecisionOwner = "aperture_core" | "paperclip_reconciliation" | "approval_overlay" | "display_merge";
+
+export type FocusDecisionMetadata = {
+  owner?: FocusDecisionOwner;
+  lane?: "now" | "next" | "ambient";
+  sourcePolicy?: string;
+  rationale?: string[];
+  promotedFromLane?: "next" | "ambient";
+};
+
 export type FocusFrameMetadata = {
   entityType?: string;
   issueStatus?: string;
@@ -34,6 +44,7 @@ export type FocusFrameMetadata = {
   };
   episode?: EpisodeMetadata;
   issueIntelligence?: IssueIntelligenceMetadata;
+  decision?: FocusDecisionMetadata;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -79,6 +90,7 @@ export function readFocusMetadata(frame: StoredAttentionFrame): FocusFrameMetada
   const semantic = asRecord(metadata?.semantic);
   const episode = asRecord(metadata?.episode);
   const issueIntelligence = asRecord(metadata?.issueIntelligence);
+  const decision = asRecord(metadata?.decision);
 
   return {
     entityType: readString(metadata?.entityType),
@@ -123,5 +135,50 @@ export function readFocusMetadata(frame: StoredAttentionFrame): FocusFrameMetada
           blockingTarget: readNullableString(issueIntelligence.blockingTarget),
         }
       : undefined,
+    decision: decision
+      ? {
+          owner:
+            decision.owner === "aperture_core"
+            || decision.owner === "paperclip_reconciliation"
+            || decision.owner === "approval_overlay"
+            || decision.owner === "display_merge"
+              ? decision.owner
+              : undefined,
+          lane:
+            decision.lane === "now" || decision.lane === "next" || decision.lane === "ambient"
+              ? decision.lane
+              : undefined,
+          sourcePolicy: readString(decision.sourcePolicy),
+          rationale: readStringArray(decision.rationale),
+          promotedFromLane:
+            decision.promotedFromLane === "next" || decision.promotedFromLane === "ambient"
+              ? decision.promotedFromLane
+              : undefined,
+        }
+      : undefined,
+  };
+}
+
+export function withFocusDecisionMetadata(
+  frame: StoredAttentionFrame,
+  decision: FocusDecisionMetadata,
+): StoredAttentionFrame {
+  const metadata = asRecord(frame.metadata) ?? {};
+  const currentDecision = asRecord(metadata.decision) ?? {};
+  const rationale = [
+    ...(readStringArray(currentDecision.rationale) ?? []),
+    ...(decision.rationale ?? []),
+  ].filter((entry, index, entries) => entries.indexOf(entry) === index);
+
+  return {
+    ...frame,
+    metadata: {
+      ...metadata,
+      decision: {
+        ...currentDecision,
+        ...decision,
+        ...(rationale.length > 0 ? { rationale } : {}),
+      },
+    },
   };
 }

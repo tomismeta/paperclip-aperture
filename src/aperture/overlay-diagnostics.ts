@@ -116,6 +116,7 @@ export function buildOverlayDiagnostics(input: {
       attentionRationale: metadata.attention?.rationale ?? [],
       matchedRuleIds: metadata.issueIntelligence?.matchedRuleIds ?? [],
       relationHintKinds: metadata.semantic?.relationHints?.map((hint) => hint.kind) ?? [],
+      decision: metadata.decision,
       changes,
     };
   });

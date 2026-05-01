@@ -11,6 +11,7 @@ export const ATTENTION_CONTEXT_IDS = {
   decisionContext: "decision-context",
   linkedIssues: "linked-issues",
   needsActionFrom: "needs-action-from",
+  blockedBy: "blocked-by",
   blocksTarget: "blocks-target",
   recommendedMove: "recommended-move",
   issueStatus: "issue-status",
@@ -55,6 +56,10 @@ export function linkedIssuesItem(value: string): AttentionContextItem {
 
 export function needsActionFromItem(value: string): AttentionContextItem {
   return item(ATTENTION_CONTEXT_IDS.needsActionFrom, "Needs action from", value);
+}
+
+export function blockedByItem(value: string): AttentionContextItem {
+  return item(ATTENTION_CONTEXT_IDS.blockedBy, "Blocked by", value);
 }
 
 export function blocksTargetItem(value: string): AttentionContextItem {

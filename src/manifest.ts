@@ -13,6 +13,7 @@ const manifest: PaperclipPluginManifestV1 = {
     "http.outbound",
     "agents.read",
     "issues.read",
+    "issue.relations.read",
     "issue.comments.read",
     "issue.comments.create",
     "issue.documents.read",

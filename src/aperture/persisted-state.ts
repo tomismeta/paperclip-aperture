@@ -10,13 +10,18 @@ import {
 } from "./types.js";
 
 const LEGACY_ATTENTION_STATE_SCHEMA_VERSION = 1;
-export const ATTENTION_STATE_SCHEMA_VERSION = 2;
+const ATTENTION_STATE_SCHEMA_VERSION_V2 = 2;
+export const ATTENTION_STATE_SCHEMA_VERSION = 3;
 
 export type PersistedAttentionStateMeta = {
   persistedAt: string;
   ledgerEntries: number;
   eventEntries: number;
   responseEntries: number;
+  overlayResponseEntries: number;
+  signalEntries: number;
+  replayStrategy: "full-ledger";
+  compactionRecommended: boolean;
 };
 
 export type PersistedAttentionState = {
@@ -39,6 +44,11 @@ type LegacyPersistedAttentionStateEnvelope = {
   payload: LegacyPersistedAttentionState;
 };
 
+type PersistedAttentionStateEnvelopeV2 = {
+  schemaVersion: typeof ATTENTION_STATE_SCHEMA_VERSION_V2;
+  payload: PersistedAttentionState;
+};
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -56,7 +66,7 @@ function isAttentionLedgerEntry(value: unknown): value is AttentionLedgerEntry {
 
   const entry = value as Record<string, unknown>;
   if (
-    (entry.kind !== "event" && entry.kind !== "response")
+    (entry.kind !== "event" && entry.kind !== "response" && entry.kind !== "overlay-response" && entry.kind !== "signal")
     || typeof entry.id !== "string"
     || typeof entry.occurredAt !== "string"
     || !isLedgerSource(entry.source)
@@ -65,7 +75,11 @@ function isAttentionLedgerEntry(value: unknown): value is AttentionLedgerEntry {
   }
 
   if (entry.kind === "event") return !!entry.apertureEvent && typeof entry.apertureEvent === "object";
-  return !!entry.apertureResponse && typeof entry.apertureResponse === "object";
+  if (entry.kind === "response") return !!entry.apertureResponse && typeof entry.apertureResponse === "object";
+  if (entry.kind === "overlay-response") {
+    return !!entry.apertureResponse && typeof entry.apertureResponse === "object" && !!entry.overlay && typeof entry.overlay === "object";
+  }
+  return !!entry.apertureSignal && typeof entry.apertureSignal === "object";
 }
 
 export function isAttentionLedger(value: unknown): value is AttentionLedger {
@@ -124,6 +138,10 @@ export function normalizePersistedAttentionState(
     return normalizePersistedAttentionStateV2(companyId, envelope as PersistedAttentionStateEnvelope);
   }
 
+  if (schemaVersion === ATTENTION_STATE_SCHEMA_VERSION_V2) {
+    return normalizePersistedAttentionStateV2(companyId, envelope as PersistedAttentionStateEnvelopeV2);
+  }
+
   if (schemaVersion === LEGACY_ATTENTION_STATE_SCHEMA_VERSION) {
     return migratePersistedAttentionStateV1(companyId, envelope as LegacyPersistedAttentionStateEnvelope);
   }
@@ -139,17 +157,22 @@ function createPersistedAttentionStateMeta(
   ledger: AttentionLedger,
   persistedAt = new Date().toISOString(),
 ): PersistedAttentionStateMeta {
+  const ledgerEntries = ledger.length;
   return {
     persistedAt,
-    ledgerEntries: ledger.length,
+    ledgerEntries,
     eventEntries: ledger.filter((entry) => entry.kind === "event").length,
     responseEntries: ledger.filter((entry) => entry.kind === "response").length,
+    overlayResponseEntries: ledger.filter((entry) => entry.kind === "overlay-response").length,
+    signalEntries: ledger.filter((entry) => entry.kind === "signal").length,
+    replayStrategy: "full-ledger",
+    compactionRecommended: ledgerEntries > 2_000,
   };
 }
 
 function normalizePersistedAttentionStateV2(
   companyId: string,
-  envelope: PersistedAttentionStateEnvelope,
+  envelope: { payload: unknown },
 ): PersistedAttentionState | null {
   const payload = asRecord(envelope.payload);
   if (!payload || payload.companyId !== companyId) return null;
@@ -235,6 +258,10 @@ function normalizePersistedAttentionStateMeta(
       ledgerEntries: meta.ledgerEntries,
       eventEntries: meta.eventEntries,
       responseEntries: meta.responseEntries,
+      overlayResponseEntries: typeof meta.overlayResponseEntries === "number" ? meta.overlayResponseEntries : ledger.filter((entry) => entry.kind === "overlay-response").length,
+      signalEntries: typeof meta.signalEntries === "number" ? meta.signalEntries : ledger.filter((entry) => entry.kind === "signal").length,
+      replayStrategy: "full-ledger",
+      compactionRecommended: typeof meta.compactionRecommended === "boolean" ? meta.compactionRecommended : ledger.length > 2_000,
     };
   }
 

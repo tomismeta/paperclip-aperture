@@ -1,6 +1,7 @@
 import {
   ApertureCore,
   type ApertureEvent,
+  type AttentionSignal,
   type AttentionFrame,
   type AttentionResponse,
 } from "@tomismeta/aperture-core";
@@ -13,7 +14,9 @@ import {
   type AttentionCoreDiagnostics,
   type AttentionLedgerEntry,
   type AttentionLedgerEventEntry,
+  type AttentionLedgerOverlayResponseEntry,
   type AttentionLedgerResponseEntry,
+  type AttentionLedgerSignalEntry,
   type AttentionLedger,
   type AttentionReviewState,
   type AttentionSnapshot,
@@ -25,6 +28,7 @@ import type { ApprovalRecord } from "../host/paperclip-approvals.js";
 type CachedCandidates = {
   key: string;
   candidates: StoredFrameCandidate[];
+  expiresAt: number;
 };
 
 type HostCacheEntry = {
@@ -49,6 +53,8 @@ type CompanySession = {
   approvals: {
     records: ApprovalRecord[] | null;
     dirty: boolean;
+    lastLoadedAt?: string;
+    lastError?: string;
   };
   hostCache: Map<string, HostCacheEntry>;
   hostDataRevision: number;
@@ -59,6 +65,7 @@ type CompanySession = {
 const MAX_TRACE_HISTORY = 100;
 const MAX_COMPANY_SESSIONS = 100;
 const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
+const RECONCILED_CANDIDATE_TTL_MS = 15_000;
 
 export class ApertureCompanyStore {
   private readonly sessions = new Map<string, CompanySession>();
@@ -69,6 +76,8 @@ export class ApertureCompanyStore {
       maxCompanySessions: MAX_COMPANY_SESSIONS,
       idleSessionTtlMs: SESSION_IDLE_TTL_MS,
       faultedCompanies: [...this.sessions.values()].filter((session) => session.persistence.state === "faulted").length,
+      hostCacheEntries: [...this.sessions.values()].reduce((sum, session) => sum + session.hostCache.size, 0),
+      cachedReconciliations: [...this.sessions.values()].filter((session) => session.reconciledCandidates !== null).length,
     };
   }
 
@@ -95,6 +104,15 @@ export class ApertureCompanyStore {
       globalSignalSummary: session.core.getSignalSummary(),
       globalAttentionState: session.core.getAttentionState(),
       memoryProfile: session.core.snapshotMemoryProfile(snapshot.updatedAt),
+      ledger: ledgerDiagnostics(session.ledger),
+      host: {
+        cacheEntries: session.hostCache.size,
+        hostDataRevision: session.hostDataRevision,
+        approvalRecords: session.approvals.records?.length ?? 0,
+        approvalsDirty: session.approvals.dirty,
+        approvalAdapterLastLoadedAt: session.approvals.lastLoadedAt,
+        approvalAdapterLastError: session.approvals.lastError,
+      },
       currentNowTask,
     };
   }
@@ -187,7 +205,15 @@ export class ApertureCompanyStore {
     const session = this.sessions.get(companyId);
     if (session) this.touchSession(session);
     const cached = session?.reconciledCandidates;
-    return cached?.key === key ? [...cached.candidates] : null;
+    if (!cached || cached.key !== key) return null;
+    if (cached.expiresAt <= Date.now()) {
+      if (session) {
+        session.reconciledCandidates = null;
+        session.hostDataRevision += 1;
+      }
+      return null;
+    }
+    return [...cached.candidates];
   }
 
   setCachedReconciledCandidates(companyId: string, key: string, candidates: StoredFrameCandidate[]): StoredFrameCandidate[] {
@@ -195,6 +221,7 @@ export class ApertureCompanyStore {
     session.reconciledCandidates = {
       key,
       candidates: [...candidates],
+      expiresAt: Date.now() + RECONCILED_CANDIDATE_TTL_MS,
     };
     return [...candidates];
   }
@@ -263,6 +290,8 @@ export class ApertureCompanyStore {
     session.approvals = {
       records: [...records],
       dirty: false,
+      lastLoadedAt: new Date().toISOString(),
+      lastError: undefined,
     };
     return [...records];
   }
@@ -279,6 +308,18 @@ export class ApertureCompanyStore {
     session.approvals = {
       records: session.approvals.records,
       dirty: true,
+      lastLoadedAt: session.approvals.lastLoadedAt,
+      lastError: session.approvals.lastError,
+    };
+  }
+
+  markApprovalAdapterFailure(companyId: string, error: string): void {
+    const session = this.ensureSession(companyId);
+    session.approvals = {
+      records: session.approvals.records,
+      dirty: true,
+      lastLoadedAt: session.approvals.lastLoadedAt,
+      lastError: error,
     };
   }
 
@@ -338,7 +379,9 @@ export class ApertureCompanyStore {
     session.ledger = [...session.ledger, entry];
 
     try {
-      const frame = session.core.publish(entry.apertureEvent);
+      const frame = entry.sourceEvent
+        ? session.core.publishSourceEvent(entry.sourceEvent)
+        : session.core.publish(entry.apertureEvent);
       session.eventCount += 1;
       session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), entry.source, entry.occurredAt);
       session.reconciledCandidates = null;
@@ -380,6 +423,36 @@ export class ApertureCompanyStore {
       session.eventCount = previousEventCount;
       throw error;
     }
+  }
+
+  applyOverlayResponse(companyId: string, entry: AttentionLedgerOverlayResponseEntry): {
+    ledger: AttentionLedger;
+    snapshot: AttentionSnapshot;
+  } {
+    const session = this.ensureSession(companyId);
+    session.ledger = [...session.ledger, entry];
+    session.reconciledCandidates = null;
+    return {
+      ledger: this.getLedger(companyId),
+      snapshot: this.syncSnapshotFromCore(companyId, session),
+    };
+  }
+
+  applySignal(companyId: string, entry: AttentionLedgerSignalEntry): {
+    ledger: AttentionLedger;
+    snapshot: AttentionSnapshot;
+    changed: boolean;
+  } {
+    const session = this.ensureSession(companyId);
+    const previousSnapshot = this.syncSnapshotFromCore(companyId, session);
+    session.ledger = [...session.ledger, entry];
+    session.core.recordSignal(entry.apertureSignal as AttentionSignal);
+    const snapshot = this.syncSnapshotFromCore(companyId, session);
+    return {
+      ledger: this.getLedger(companyId),
+      snapshot,
+      changed: !sameSnapshotAttention(previousSnapshot, snapshot),
+    };
   }
 
   replaceLedger(companyId: string, ledger: AttentionLedger): AttentionLedger {
@@ -498,6 +571,8 @@ export class ApertureCompanyStore {
     session.approvals = {
       records: previous?.approvals.records ? [...previous.approvals.records] : null,
       dirty: previous?.approvals.dirty ?? true,
+      lastLoadedAt: previous?.approvals.lastLoadedAt,
+      lastError: previous?.approvals.lastError,
     };
     session.hostCache = previous ? new Map(previous.hostCache) : new Map<string, HostCacheEntry>();
     session.hostDataRevision = previous?.hostDataRevision ?? 0;
@@ -511,10 +586,16 @@ export class ApertureCompanyStore {
         lastSource = entry.source;
         lastOccurredAt = entry.occurredAt;
         if (entry.kind === "event") {
-          session.core.publish(entry.apertureEvent);
+          if (entry.sourceEvent) {
+            session.core.publishSourceEvent(entry.sourceEvent);
+          } else {
+            session.core.publish(entry.apertureEvent);
+          }
           session.eventCount += 1;
-        } else {
+        } else if (entry.kind === "response") {
           session.core.submit(entry.apertureResponse);
+        } else if (entry.kind === "signal") {
+          session.core.recordSignal(entry.apertureSignal);
         }
       }
       session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), lastSource, lastOccurredAt);
@@ -618,6 +699,18 @@ function sameInteractionOrder(
 ): boolean {
   return left.length === right.length
     && left.every((frame, index) => frame.interactionId === right[index]?.interactionId);
+}
+
+function ledgerDiagnostics(ledger: AttentionLedger) {
+  return {
+    entries: ledger.length,
+    eventEntries: ledger.filter((entry) => entry.kind === "event").length,
+    responseEntries: ledger.filter((entry) => entry.kind === "response").length,
+    overlayResponseEntries: ledger.filter((entry) => entry.kind === "overlay-response").length,
+    signalEntries: ledger.filter((entry) => entry.kind === "signal").length,
+    replayStrategy: "full-ledger" as const,
+    compactionRecommended: ledger.length > 2_000,
+  };
 }
 
 function healthyPersistenceStatus(): PersistenceStatus {

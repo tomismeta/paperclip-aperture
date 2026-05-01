@@ -100,5 +100,185 @@
       "recommendedMove": "Unblock the dependency or add the missing context needed to continue.",
       "headline": "Blocked issue waiting on clarification before work can continue."
     }
+  },
+  {
+    "name": "no-further-questions-does-not-trigger-clarification",
+    "issue": {
+      "id": "issue-7",
+      "identifier": "APE-14",
+      "title": "Close launch memo",
+      "description": "The review is ready to close.",
+      "status": "in_review"
+    },
+    "comment": "No further questions from me. This is ready to proceed.",
+    "expected": {
+      "intents": ["resolution"],
+      "absentIntents": ["clarification"],
+      "recommendedMove": "Monitor execution and confirm the team resumes work.",
+      "headline": "Latest operator guidance appears to unblock this issue."
+    }
+  },
+  {
+    "name": "waiting-on-specific-human",
+    "issue": {
+      "id": "issue-8",
+      "identifier": "APE-15",
+      "title": "Confirm vendor budget",
+      "description": "Waiting on @ops-lead for the final vendor number.",
+      "status": "blocked"
+    },
+    "comment": "Need clarification from @ops-lead before we can approve the vendor increase.",
+    "expected": {
+      "intents": ["clarification"],
+      "owner": "Ops-lead",
+      "recommendedMove": "Unblock the dependency or add the missing context needed to continue.",
+      "headline": "Blocked on ops-lead clarification before work can continue."
+    }
+  },
+  {
+    "name": "dependency-reference-only",
+    "issue": {
+      "id": "issue-9",
+      "identifier": "APE-16",
+      "title": "Staging deploy held",
+      "description": "Complete APE-20 before deploy can continue.",
+      "status": "blocked"
+    },
+    "comment": "APE-20 is the blocker here.",
+    "expected": {
+      "intents": ["dependency_reference"],
+      "blockingTarget": "APE-20",
+      "recommendedMove": "Complete the blocking dependency or add enough context to proceed.",
+      "headline": "Blocked issue that may need operator intervention to move forward."
+    }
+  },
+  {
+    "name": "share-with-board-in-description",
+    "issue": {
+      "id": "issue-10",
+      "identifier": "APE-17",
+      "title": "Board packet prep",
+      "description": "Please share the attached forecast with the board before review.",
+      "status": "in_review"
+    },
+    "expected": {
+      "intents": ["share_with_board"],
+      "recommendedMove": "Share the memo with the board so review can continue.",
+      "headline": "Board still needs the memo before review can continue."
+    }
+  },
+  {
+    "name": "operator-review-owner",
+    "issue": {
+      "id": "issue-11",
+      "identifier": "APE-18",
+      "title": "Investigate tool failure",
+      "description": "Operator review is needed after the checkout tool failed.",
+      "status": "blocked"
+    },
+    "comment": "Operator intervention required before retrying.",
+    "expected": {
+      "intents": [],
+      "owner": "Operator",
+      "recommendedMove": "Unblock the dependency or add the missing context needed to continue.",
+      "headline": "Blocked on operator action before work can continue."
+    }
+  },
+  {
+    "name": "confirmation-without-target",
+    "issue": {
+      "id": "issue-12",
+      "identifier": "APE-19",
+      "title": "Confirm homepage variant",
+      "description": "Confirm whether variant B should ship.",
+      "status": "in_review"
+    },
+    "comment": "Please review and confirm whether this direction is right.",
+    "expected": {
+      "intents": ["confirmation"],
+      "recommendedMove": "Review the draft and confirm whether work should proceed.",
+      "headline": "Issue is waiting on human review before work can continue."
+    }
+  },
+  {
+    "name": "resolved-unblocked-wording",
+    "issue": {
+      "id": "issue-13",
+      "identifier": "APE-21",
+      "title": "Resume onboarding flow",
+      "description": "The prior dependency is now resolved.",
+      "status": "blocked"
+    },
+    "comment": "Resolved. You can proceed with the onboarding workflow.",
+    "expected": {
+      "intents": ["resolution"],
+      "recommendedMove": "Monitor execution and confirm the team resumes work.",
+      "headline": "Latest operator guidance appears to unblock this issue."
+    }
+  },
+  {
+    "name": "feedback-needed-clarification",
+    "issue": {
+      "id": "issue-14",
+      "identifier": "APE-22",
+      "title": "Polish dashboard copy",
+      "description": "Feedback needed before the copy pass can close.",
+      "status": "blocked"
+    },
+    "comment": "Feedback needed from the operator on the empty state.",
+    "expected": {
+      "intents": ["clarification"],
+      "recommendedMove": "Unblock the dependency or add the missing context needed to continue.",
+      "headline": "Blocked issue waiting on clarification before work can continue."
+    }
+  },
+  {
+    "name": "board-can-owner-without-board-instruction",
+    "issue": {
+      "id": "issue-15",
+      "identifier": "APE-23",
+      "title": "Decide investor note",
+      "description": "Board can approve the investor note after reviewing.",
+      "status": "blocked"
+    },
+    "expected": {
+      "intents": [],
+      "owner": "Board",
+      "recommendedMove": "Unblock the dependency or add the missing context needed to continue.",
+      "headline": "Blocked on board action before work can continue."
+    }
+  },
+  {
+    "name": "external-code-not-self-reference",
+    "issue": {
+      "id": "issue-16",
+      "identifier": "APE-24",
+      "title": "Coordinate downstream release",
+      "description": "APE-24 is ready, but OPS-8 needs to finish first.",
+      "status": "blocked"
+    },
+    "expected": {
+      "intents": ["dependency_reference"],
+      "blockingTarget": "OPS-8",
+      "recommendedMove": "Unblock the dependency or add the missing context needed to continue.",
+      "headline": "Blocked issue that may need operator intervention to move forward."
+    }
+  },
+  {
+    "name": "informative-status-no-intent",
+    "issue": {
+      "id": "issue-17",
+      "identifier": "APE-25",
+      "title": "Track launch note",
+      "description": "The draft exists and is under normal review.",
+      "status": "in_review"
+    },
+    "comment": "FYI, I added a small note to the doc.",
+    "expected": {
+      "intents": [],
+      "absentIntents": ["clarification", "resolution", "share_with_board"],
+      "recommendedMove": "Review the issue and decide whether work can continue.",
+      "headline": "Issue is waiting on human review before work can continue."
+    }
   }
 ]

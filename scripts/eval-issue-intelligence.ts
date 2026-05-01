@@ -24,6 +24,7 @@ type CorpusFixture = {
   directory?: IssueActorDirectory;
   expected: {
     intents: string[];
+    absentIntents?: string[];
     owner?: string;
     blockingTarget?: string;
     recommendedMove?: string;
@@ -83,6 +84,13 @@ async function main() {
   const fixtures = JSON.parse(await readFile(fixturePath, "utf8")) as CorpusFixture[];
 
   const failures: string[] = [];
+  const intentStats = new Map<string, { expected: number; matched: number; falsePositive: number }>();
+
+  function statsFor(intent: string) {
+    const current = intentStats.get(intent) ?? { expected: 0, matched: 0, falsePositive: 0 };
+    intentStats.set(intent, current);
+    return current;
+  }
 
   for (const fixture of fixtures) {
     const issue = createIssue(fixture.issue);
@@ -92,8 +100,18 @@ async function main() {
     const headline = issueHeadline(issue, analysis);
 
     for (const intent of fixture.expected.intents) {
+      statsFor(intent).expected += 1;
       if (!hasIntent(analysis, intent as never)) {
         failures.push(`${fixture.name}: missing intent ${intent}`);
+      } else {
+        statsFor(intent).matched += 1;
+      }
+    }
+
+    for (const intent of fixture.expected.absentIntents ?? []) {
+      if (hasIntent(analysis, intent as never)) {
+        failures.push(`${fixture.name}: unexpected intent ${intent}`);
+        statsFor(intent).falsePositive += 1;
       }
     }
 
@@ -120,7 +138,14 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Issue intelligence eval passed (${fixtures.length}/${fixtures.length} fixtures)`);
+  const summary = [...intentStats.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([intent, stats]) => {
+      const recall = stats.expected === 0 ? 1 : stats.matched / stats.expected;
+      return `${intent}: recall ${(recall * 100).toFixed(0)}%, false positives ${stats.falsePositive}`;
+    })
+    .join("; ");
+  console.log(`Issue intelligence eval passed (${fixtures.length}/${fixtures.length} fixtures). ${summary}`);
 }
 
 await main();

@@ -14,7 +14,12 @@ const DEFAULT_PAPERCLIP_API_BASE = "http://127.0.0.1:3100";
 
 function resolvePaperclipApiBase(config: Record<string, unknown>): string {
   const configured = typeof config.paperclipApiBase === "string" ? config.paperclipApiBase.trim() : "";
-  return configured.length > 0 ? configured : DEFAULT_PAPERCLIP_API_BASE;
+  const base = configured.length > 0 ? configured : DEFAULT_PAPERCLIP_API_BASE;
+  const url = new URL(base);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("paperclipApiBase must be an http(s) URL.");
+  }
+  return url.toString();
 }
 
 async function paperclipApiFetch<TResponse>(

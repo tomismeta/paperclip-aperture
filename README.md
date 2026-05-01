@@ -84,6 +84,8 @@ and agents                             attention now?    actually sees     to th
 - a sidebar entry, page, and dashboard widget
 - worker-side host read caching for issue/comment/document/agent reconciliation, with fresh summary/export reads when you need the latest host truth
 - bounded per-company Core sessions with health reporting so the worker does not grow without limit during normal multi-company use
+- replayable operator signal entries and overlay-response ledger entries so Focus actions remain auditable even when a frame came from the display adapter rather than Core
+- decision-owner metadata on reconciled/display frames so exports can distinguish Core judgment, Paperclip reconciliation, approval overlays, and final display promotion
 - a corpus-backed `issue-intelligence` regression check in CI so heuristic edits stay inspectable
 - rollback-safe local mutations that restore the last durable attention state if persistence fails
 - versioned persisted attention envelopes with an explicit migration path for older schemas
@@ -92,7 +94,7 @@ and agents                             attention now?    actually sees     to th
 
 Focus is meant to be more legible than a smart inbox.
 
-The current `0.3.x` explainability slice keeps reasoning attached to the cards you are already acting on:
+The current `0.4.x` explainability slice keeps reasoning attached to the cards you are already acting on:
 
 - `Why now` on the active card explains why the current item outranks the rest of the queue
 - `Why next` on queued rows explains why something is staged behind the current top item
@@ -118,12 +120,13 @@ For `0.4.x`, the boundary works like this:
 - the final Focus view is therefore Core-backed but not Core-only today: the plugin still owns some Paperclip-specific candidate and lane policy where the host has facts Core cannot infer by itself
 - Paperclip remains the system of record for issue and approval writes
 - approval transport now goes through a worker-side Paperclip adapter using the plugin SDK HTTP client, so the browser UI no longer talks to host approval APIs directly
-- the plugin intentionally publishes `ApertureEvent`s today, using a Paperclip-specific semantic mapping layer and ontology, rather than switching fully to `SourceEvent`
+- the plugin preserves Paperclip source facts as `SourceEvent`s where the Core contract supports them, while still exporting the normalized `ApertureEvent` used for replay/debug
 - that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, explicit rule ids for matched issue heuristics, and shared operator-language generation inside the plugin
+- typed Paperclip issue blocker relations are preserved as Focus context/provenance/metadata so Aperture has better dependency facts without the plugin inventing dependency routing
 - `activity.logged` document events invalidate stale reconciled state so document-backed review blockers refresh promptly without a full browser-side merge layer
 - Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
 
-The plugin has been validated against [`@tomismeta/aperture-core@0.6.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.403.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
+The plugin has been validated against [`@tomismeta/aperture-core@0.7.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.428.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
 
 If your Paperclip host is not running at the default local address, set the plugin config field `paperclipApiBase` so the worker-side approval adapter can reach the correct host API.
 
@@ -174,6 +177,7 @@ Then open `http://127.0.0.1:3100/APE/aperture` and verify:
 - Plugin on npm: [`@tomismeta/paperclip-aperture`](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
 - Roadmap and releasing: [docs/ROADMAP.md](./docs/ROADMAP.md)
 - Architecture remediation note: [docs/AUDIT-REMEDIATION-2026-04.md](./docs/AUDIT-REMEDIATION-2026-04.md)
+- May 2026 audit remediation note: [docs/AUDIT-REMEDIATION-2026-05.md](./docs/AUDIT-REMEDIATION-2026-05.md)
 - Contribution guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
 - Aperture Core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)

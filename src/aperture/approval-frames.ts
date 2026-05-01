@@ -8,6 +8,7 @@ import {
 import { mergeStoredFrames } from "./frame-model.js";
 import { approvalBlockingSummary, approvalBlockingWhyNow } from "./attention-language.js";
 import { createInteractionId, createTaskId } from "./task-ref.js";
+import { withFocusDecisionMetadata } from "./contracts.js";
 import { createEmptySnapshot, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "./types.js";
 import type { ApprovalRecord } from "../host/paperclip-approvals.js";
 export type { ApprovalRecord } from "../host/paperclip-approvals.js";
@@ -60,7 +61,7 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
       : ["approval", "operator decision"],
   };
 
-  return {
+  return withFocusDecisionMetadata({
     id: `approval-bootstrap:${record.id}`,
     taskId,
     interactionId: createInteractionId(taskId, "approval"),
@@ -111,7 +112,12 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
         confidence: "high",
       },
     },
-  };
+  }, {
+    owner: "approval_overlay",
+    lane: "next",
+    sourcePolicy: "pendingApprovals.displayOverlay",
+    rationale: ["Pending approval fetched from Paperclip approvals adapter."],
+  });
 }
 
 export function mergeSnapshotWithApprovals(

@@ -5,6 +5,7 @@ import type { ApertureCompanyStore } from "./core-store.js";
 import {
   agentStatusItem,
   agentTitleItem,
+  blockedByItem,
   blocksTargetItem,
   issuePriorityItem,
   issueStatusItem,
@@ -33,13 +34,17 @@ import {
   truncate,
 } from "./issue-intelligence.js";
 import { createInteractionId, createTaskId } from "./task-ref.js";
+import { withFocusDecisionMetadata } from "./contracts.js";
 
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
+type IssueRelationSummary = Awaited<ReturnType<PluginIssuesClient["relations"]["get"]>>;
+type IssueRelationIssueSummary = IssueRelationSummary["blockedBy"][number];
 
 const COMMENT_LOOKUP_CONCURRENCY = 6;
 const ISSUE_LIST_TTL_MS = 15_000;
 const ISSUE_COMMENTS_TTL_MS = 15_000;
 const ISSUE_DOCUMENTS_TTL_MS = 15_000;
+const ISSUE_RELATIONS_TTL_MS = 15_000;
 const AGENT_LIST_TTL_MS = 15_000;
 
 function semanticMetadata(
@@ -83,6 +88,7 @@ function issueTitle(issue: Issue): string {
 type IssueFrameEvidence = {
   analysis: IssueIntentAnalysis;
   documentSignal: IssueDocumentSignal;
+  relations: IssueRelationSummary | null;
 };
 
 function latestComment(comments: IssueComment[]): LatestComment {
@@ -114,12 +120,65 @@ function issueLane(issue: Issue, comment: LatestComment, evidence: IssueFrameEvi
   return null;
 }
 
+function isResolvedRelationIssue(issue: IssueRelationIssueSummary): boolean {
+  return issue.status === "done" || issue.status === "cancelled";
+}
+
+function unresolvedBlockers(relations: IssueRelationSummary | null): IssueRelationIssueSummary[] {
+  return relations?.blockedBy.filter((issue) => !isResolvedRelationIssue(issue)) ?? [];
+}
+
+function primaryUnresolvedBlocker(relations: IssueRelationSummary | null): IssueRelationIssueSummary | null {
+  return unresolvedBlockers(relations)[0] ?? null;
+}
+
+function relationIssueLabel(issue: IssueRelationIssueSummary): string {
+  return issue.identifier ? `${issue.identifier} ${issue.title}` : issue.title;
+}
+
+function relationContextLabel(relations: IssueRelationSummary | null): string | null {
+  const blockers = unresolvedBlockers(relations);
+  if (blockers.length === 0) return null;
+
+  const [first, ...rest] = blockers;
+  const label = relationIssueLabel(first);
+  return rest.length > 0 ? `${label} +${rest.length} more` : label;
+}
+
+function relationMetadata(relations: IssueRelationSummary | null): Record<string, unknown> | undefined {
+  if (!relations || (relations.blockedBy.length === 0 && relations.blocks.length === 0)) return undefined;
+
+  const summarize = (issue: IssueRelationIssueSummary) => ({
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    status: issue.status,
+    priority: issue.priority,
+  });
+
+  return {
+    blockedBy: relations.blockedBy.map(summarize),
+    blocks: relations.blocks.map(summarize),
+  };
+}
+
 function issueSummary(issue: Issue, evidence: IssueFrameEvidence): string {
+  const blocker = primaryUnresolvedBlocker(evidence.relations);
+  if (blocker) return `${relationIssueLabel(blocker)} is a tracked blocker for this issue.`;
+
   return issueHeadlineText(issue, evidence.analysis, evidence.documentSignal);
 }
 
 function issueProvenance(issue: Issue, evidence: IssueFrameEvidence) {
-  return issueWhyNow(issue, evidence.analysis, evidence.documentSignal);
+  const base = issueWhyNow(issue, evidence.analysis, evidence.documentSignal);
+  const blocker = primaryUnresolvedBlocker(evidence.relations);
+  if (!blocker) return base;
+
+  return {
+    ...base,
+    whyNow: `${relationIssueLabel(blocker)} is linked as a blocker in Paperclip.`,
+    factors: [...new Set([...(base.factors ?? []), "blocked by issue relation"])],
+  };
 }
 
 function issueAttentionTimestamp(
@@ -141,11 +200,12 @@ function issueFrame(
   issue: Issue,
   comment: LatestComment,
   documents: IssueDocumentSummary[],
+  relations: IssueRelationSummary | null,
   directory?: IssueActorDirectory,
 ): StoredFrameCandidate | null {
   const analysis = analyzeIssueIntents(issue, comment, directory);
   const documentSignal = analyzeIssueDocuments(documents, comment, analysis);
-  const evidence: IssueFrameEvidence = { analysis, documentSignal };
+  const evidence: IssueFrameEvidence = { analysis, documentSignal, relations };
   const lane = issueLane(issue, comment, evidence);
   if (!lane) return null;
 
@@ -156,10 +216,12 @@ function issueFrame(
   const target = analysis.blockingTarget;
   const semantic = semanticMetadata(analysis.semanticConfidence, analysis.relationHints);
   const taskId = createTaskId("issue", issue.id);
+  const blockedBy = relationContextLabel(relations);
+  const relationsMetadata = relationMetadata(relations);
 
   return {
     lane,
-    frame: {
+    frame: withFocusDecisionMetadata({
       id: `reconcile:issue:${issue.id}:${updatedAt}`,
       taskId,
       interactionId: createInteractionId(taskId, issue.status),
@@ -177,6 +239,7 @@ function issueFrame(
       context: {
         items: [
           ...(owner ? [needsActionFromItem(owner)] : []),
+          ...(blockedBy ? [blockedByItem(blockedBy)] : []),
           ...(target ? [blocksTargetItem(target)] : []),
           ...(move ? [recommendedMoveItem(move)] : []),
           issueStatusItem(issue.status.replace(/_/g, " ")),
@@ -205,9 +268,15 @@ function issueFrame(
             ownerKind: analysis.ownerKind,
             blockingTarget: analysis.blockingTarget,
           },
+          ...(relationsMetadata ? { issueRelations: relationsMetadata } : {}),
           ...(semantic ? { semantic } : {}),
         },
-      },
+    }, {
+      owner: "paperclip_reconciliation",
+      lane,
+      sourcePolicy: `issue.${issue.status}.${issue.priority}`,
+      rationale: provenance.factors ?? [],
+    }),
   };
 }
 
@@ -237,7 +306,7 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
 
   return {
     lane,
-    frame: {
+    frame: withFocusDecisionMetadata({
       id: `reconcile:agent:${agent.id}:${updatedAt}`,
       taskId,
       interactionId: createInteractionId(taskId, agent.status),
@@ -288,7 +357,12 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
           confidence: "high" as const,
         },
       },
-    },
+    }, {
+      owner: "paperclip_reconciliation",
+      lane,
+      sourcePolicy: `agent.${agent.status}${agent.pauseReason ? `.${agent.pauseReason}` : ""}`,
+      rationale: provenance.factors ?? [],
+    }),
   };
 }
 
@@ -333,6 +407,30 @@ async function safeListDocuments(
       error: error instanceof Error ? error.message : String(error),
     });
     return [];
+  }
+}
+
+async function safeListRelations(
+  ctx: PluginContext,
+  issue: Issue,
+): Promise<IssueRelationSummary | null> {
+  const inlineBlockedBy = issue.blockedBy ?? [];
+  const inlineBlocks = issue.blocks ?? [];
+  if (inlineBlockedBy.length > 0 || inlineBlocks.length > 0) {
+    return {
+      blockedBy: inlineBlockedBy,
+      blocks: inlineBlocks,
+    };
+  }
+
+  try {
+    return await ctx.issues.relations.get(issue.id, issue.companyId);
+  } catch (error) {
+    ctx.logger.warn("Failed to load issue relations during Aperture reconciliation", {
+      issueId: issue.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   }
 }
 
@@ -395,7 +493,7 @@ async function loadIssueCandidates(
   ]);
 
   const issues = [...blocked, ...inReview];
-  const [comments, documents] = await Promise.all([
+  const [comments, documents, relations] = await Promise.all([
     mapWithConcurrency(
       issues,
       COMMENT_LOOKUP_CONCURRENCY,
@@ -420,13 +518,25 @@ async function loadIssueCandidates(
         () => safeListDocuments(ctx, issue),
       ),
     ),
+    mapWithConcurrency(
+      issues,
+      COMMENT_LOOKUP_CONCURRENCY,
+      (issue) => cachedRead(
+        store,
+        companyId,
+        `issue:${issue.id}:relations`,
+        ISSUE_RELATIONS_TTL_MS,
+        { fresh: options?.freshHostData },
+        () => safeListRelations(ctx, issue),
+      ),
+    ),
   ]);
   const directory: IssueActorDirectory = {
     agentNames: allAgents.map((agent) => agent.name).filter((name): name is string => typeof name === "string" && name.trim().length > 0),
   };
 
   return issues
-    .map((issue, index) => issueFrame(issue, comments[index] ?? null, documents[index] ?? [], directory))
+    .map((issue, index) => issueFrame(issue, comments[index] ?? null, documents[index] ?? [], relations[index] ?? null, directory))
     .filter((candidate): candidate is StoredFrameCandidate => candidate !== null);
 }
 

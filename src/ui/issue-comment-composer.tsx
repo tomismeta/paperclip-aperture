@@ -10,6 +10,9 @@ export function IssueCommentComposer(props: {
   triggerTone?: "link" | "secondary" | "primary" | "accent";
   triggerLabel?: string;
   triggerFullWidth?: boolean;
+  onOpen?: () => void;
+  rows?: number;
+  panelClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
@@ -46,7 +49,10 @@ export function IssueCommentComposer(props: {
         <button
           type="button"
           className="text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            props.onOpen?.();
+            setOpen(true);
+          }}
         >
           {label}
         </button>
@@ -59,13 +65,16 @@ export function IssueCommentComposer(props: {
         tone={triggerTone}
         className={props.triggerFullWidth ? "w-full" : undefined}
         disabled={isPending}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          props.onOpen?.();
+          setOpen(true);
+        }}
       />
     );
   }
 
   return (
-    <div className="w-full space-y-2 rounded-md border border-border bg-secondary/40 p-3">
+    <div className={props.panelClassName ?? "w-full space-y-2 rounded-md border border-border bg-secondary/40 p-3"}>
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Commenting on {compactTitle(props.frame)}
       </div>
@@ -88,7 +97,7 @@ export function IssueCommentComposer(props: {
             setBody("");
           }
         }}
-        rows={3}
+        rows={props.rows ?? 3}
         placeholder="Add a short operator note back to the issue…"
         className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none transition focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
       />
