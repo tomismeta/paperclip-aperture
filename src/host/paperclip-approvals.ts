@@ -10,12 +10,16 @@ export type ApprovalRecord = {
   updatedAt: string;
 };
 
-const DEFAULT_PAPERCLIP_API_BASE = "http://127.0.0.1:3100";
+function isReservedRangeFetchFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes("private/reserved ranges");
+}
 
-function resolvePaperclipApiBase(config: Record<string, unknown>): string {
+function resolvePaperclipApiBase(config: Record<string, unknown>): string | null {
   const configured = typeof config.paperclipApiBase === "string" ? config.paperclipApiBase.trim() : "";
-  const base = configured.length > 0 ? configured : DEFAULT_PAPERCLIP_API_BASE;
-  const url = new URL(base);
+  if (configured.length === 0) return null;
+
+  const url = new URL(configured);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("paperclipApiBase must be an http(s) URL.");
   }
@@ -34,7 +38,11 @@ async function paperclipApiFetch<TResponse>(
     headers,
     ...init
   } = options;
-  const url = new URL(path, resolvePaperclipApiBase(config)).toString();
+  const apiBase = resolvePaperclipApiBase(config);
+  if (!apiBase) {
+    throw new Error("Paperclip approval API base is not configured.");
+  }
+  const url = new URL(path, apiBase).toString();
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -70,12 +78,19 @@ export async function listPendingApprovals(
   companyId: string,
   config: Record<string, unknown>,
 ): Promise<ApprovalRecord[]> {
-  return paperclipApiFetch<ApprovalRecord[]>(
-    ctx,
-    config,
-    `/api/companies/${companyId}/approvals?status=pending`,
-    { method: "GET", retries: 2 },
-  );
+  if (!resolvePaperclipApiBase(config)) return [];
+
+  try {
+    return await paperclipApiFetch<ApprovalRecord[]>(
+      ctx,
+      config,
+      `/api/companies/${companyId}/approvals?status=pending`,
+      { method: "GET", retries: 2 },
+    );
+  } catch (error) {
+    if (isReservedRangeFetchFailure(error)) return [];
+    throw error;
+  }
 }
 
 export async function submitApprovalDecision(

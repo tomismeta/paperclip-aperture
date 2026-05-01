@@ -128,7 +128,7 @@ For `0.4.x`, the boundary works like this:
 
 The plugin has been validated against [`@tomismeta/aperture-core@0.7.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.428.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
 
-If your Paperclip host is not running at the default local address, set the plugin config field `paperclipApiBase` so the worker-side approval adapter can reach the correct host API.
+Approval overlay transport is opt-in until the Paperclip plugin SDK exposes a first-class approval client. Set the plugin config field `paperclipApiBase` when the worker can reach the host approval API; leave it empty to run Focus without approval overlays in hosted or restricted-network environments.
 
 ## Development
 
@@ -161,12 +161,14 @@ npx paperclipai plugin uninstall tomismeta.paperclip-aperture --force
 npx paperclipai plugin install --local .
 ```
 
+If you want to smoke test approval overlays locally, set the plugin config field `paperclipApiBase` to `http://127.0.0.1:3100` before creating approval fixtures. Without that config, Focus intentionally skips approval API reads and stays quiet.
+
 Then open `http://127.0.0.1:3100/APE/aperture` and verify:
 
 - `Acknowledge` hides the active card and survives refresh
 - `Next` promotes into `Now`
 - issue comments post successfully from Focus
-- approval actions update Focus correctly
+- approval actions update Focus correctly when `paperclipApiBase` is configured
 - resolved blocker comments downgrade stale `Now` items
 - attached issue documents downgrade stale `share the memo/spec` review blockers into monitor-only follow-up
 - the active card exposes `Why now`

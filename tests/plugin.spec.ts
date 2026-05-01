@@ -155,6 +155,7 @@ function mockApprovalApi(
   harness: ReturnType<typeof createTestHarness>,
   approvals: Array<Record<string, unknown>> = [],
 ) {
+  harness.setConfig({ paperclipApiBase: "http://paperclip.test" });
   harness.ctx.http.fetch = vi.fn(async (url: string, init?: RequestInit) => {
     if (url.includes("/api/companies/") && url.includes("/approvals?status=pending")) {
       return new Response(JSON.stringify(approvals), {
@@ -1505,6 +1506,49 @@ describe("paperclip aperture", () => {
 
     expect(display.snapshot.now?.taskId).toBe("approval:approval-1");
     expect(display.snapshot.now?.title).toBe("Approve launch cutover");
+  });
+
+  it("stays quiet when no Paperclip approval API base is configured", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    const fetchSpy = vi.spyOn(harness.ctx.http, "fetch");
+
+    const display = await harness.getData<{ snapshot: AttentionSnapshot }>("attention-display", {
+      companyId: "company-display-no-api",
+    });
+
+    expect(display.snapshot.now).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-display-no-api",
+    });
+    expect(diagnostics.host.approvalAdapterLastError).toBeUndefined();
+  });
+
+  it("treats reserved-range approval fetch failures as unavailable approvals", async () => {
+    const harness = createTestHarness({
+      manifest,
+      config: {
+        paperclipApiBase: "http://127.0.0.1:3100",
+      },
+    });
+    await plugin.definition.setup(harness.ctx);
+    const fetchSpy = vi.spyOn(harness.ctx.http, "fetch").mockRejectedValue(
+      new Error("Request blocked: private/reserved ranges are unavailable"),
+    );
+
+    const display = await harness.getData<{ snapshot: AttentionSnapshot }>("attention-display", {
+      companyId: "company-display-reserved-range",
+    });
+
+    expect(display.snapshot.now).toBeNull();
+    expect(fetchSpy).toHaveBeenCalled();
+
+    const diagnostics = await harness.getData<AttentionCoreDiagnostics>("attention-diagnostics", {
+      companyId: "company-display-reserved-range",
+    });
+    expect(diagnostics.host.approvalAdapterLastError).toBeUndefined();
   });
 
   it("surfaces approval overlay diagnostics for worker-merged display frames", async () => {

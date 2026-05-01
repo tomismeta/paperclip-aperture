@@ -47,8 +47,8 @@ const manifest: PaperclipPluginManifestV1 = {
       paperclipApiBase: {
         type: "string",
         title: "Paperclip API Base",
-        default: "http://127.0.0.1:3100",
-        description: "Base URL the worker should use for Paperclip approval reads and writes when the plugin SDK lacks a first-class approval client."
+        default: "",
+        description: "Optional base URL for Paperclip approval reads and writes. Leave empty to disable approval API fetches when the plugin SDK lacks a first-class approval client."
       }
     }
   },
