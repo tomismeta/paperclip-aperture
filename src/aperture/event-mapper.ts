@@ -66,6 +66,15 @@ function makeTaskId(event: MappablePluginEvent): string {
   return createTaskId(entityType, entityId);
 }
 
+function relatedIssueTaskId(payload: unknown): string | null {
+  const issueId =
+    readPayloadString(payload, "issueId")
+    ?? readPayloadString(payload, "sourceIssueId")
+    ?? readPayloadString(payload, "parentIssueId")
+    ?? readStringArray(payload, "issueIds")?.[0];
+  return issueId ? createTaskId("issue", issueId) : null;
+}
+
 function makeSource(event: MappablePluginEvent): SourceRef {
   const entityType = event.entityType ?? "event";
 
@@ -452,41 +461,33 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
 
     case "agent.run.failed":
       {
+        const failureTaskId = relatedIssueTaskId(event.payload) ?? taskId;
         const title = readPayloadString(event.payload, "title") ?? "Agent run failed";
         const summary = readPayloadString(event.payload, "summary") ?? runFailedSummary();
         return {
         id: `${event.eventId}:run-failed`,
-        type: "human.input.requested",
-        taskId,
-        interactionId: createInteractionId(taskId, "run-failed"),
+        type: "task.updated",
+        taskId: failureTaskId,
         timestamp: event.occurredAt,
         source,
         toolFamily: "paperclip",
         activityClass: "tool_failure",
+        status: "failed",
         title,
         summary,
-        consequence: "high",
-        tone: "critical",
-        request: { kind: "approval" },
         semantic: interpretEventSemantic({
           id: `${event.eventId}:run-failed`,
-          type: "human.input.requested",
-          taskId,
-          interactionId: createInteractionId(taskId, "run-failed"),
+          type: "task.updated",
+          taskId: failureTaskId,
           timestamp: event.occurredAt,
           source,
           toolFamily: "paperclip",
           activityClass: "tool_failure",
           title,
           summary,
-          request: { kind: "approval" },
-          riskHint: "high",
+          status: "failed",
           semanticHints: runFailureSemanticHints(),
         }),
-        provenance: {
-          whyNow: runFailedWhyNow(),
-          factors: ["run failed", "operator review"],
-        },
       };
       }
 

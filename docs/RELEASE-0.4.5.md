@@ -12,6 +12,9 @@ uses the newer host attention contracts where they improve Focus judgment.
 - keeps planning-mode blockers calmer unless the host marks them urgent
 - preserves document lock metadata in review handoff copy and diagnostics
 - excludes plugin-operation issues from host reconciliation scans
+- uses a host-rendered sidebar launcher for the Focus entry
+- makes agent run failure cards acknowledgeable and clears issue-linked failures when the issue moves on
+- documents the Windows `spawn npm ENOENT` Paperclip installer failure mode
 
 ## Why This Matters
 
@@ -21,6 +24,8 @@ uses the newer host attention contracts where they improve Focus judgment.
   contracts
 - improves operator clarity around locked review artifacts and planning-mode
   work without changing the plugin boundary
+- closes the feedback loop for stale failure cards and broken sidebar entry
+  reports from early `0.4.4` installs
 
 ## Validation
 

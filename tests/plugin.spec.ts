@@ -9,8 +9,10 @@ import type {
   AttentionReplayScenario,
   AttentionReviewState,
   AttentionSnapshot,
+  StoredAttentionFrame,
 } from "../src/aperture/types.js";
 import type { ApprovalRecord } from "../src/aperture/approval-frames.js";
+import { responseKind } from "../src/ui/frame-helpers.js";
 import plugin from "../src/worker.js";
 import {
   ATTENTION_STATE_KEY,
@@ -258,6 +260,21 @@ function mockApprovalApi(
 }
 
 describe("paperclip aperture", () => {
+  it("declares a host-rendered Focus sidebar launcher", () => {
+    expect(manifest.ui?.slots?.some((slot) => slot.type === "sidebar")).toBe(false);
+    expect(manifest.ui?.launchers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "focus-sidebar",
+        displayName: "Focus",
+        placementZone: "sidebar",
+        action: expect.objectContaining({
+          type: "navigate",
+          target: "/aperture",
+        }),
+      }),
+    ]));
+  });
+
   it("maps approval events into attention state and clears them on acknowledgement", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
@@ -463,6 +480,73 @@ describe("paperclip aperture", () => {
     const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-2" });
     expect(snapshot.now?.consequence).toBe("high");
     expect(snapshot.now?.title).toContain("Build failed");
+    expect(snapshot.now?.mode).toBe("status");
+    expect(snapshot.now?.responseSpec?.kind).toBe("acknowledge");
+  });
+
+  it("clears issue-linked run failures when the issue moves out of an actionable state", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "agent.run.failed",
+      {
+        issueId: "issue-77",
+        title: "Issue run failed",
+        summary: "The issue run failed during validation.",
+      },
+      { companyId: "company-run-issue", entityId: "run-77", entityType: "run" },
+    );
+
+    const failed = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-run-issue" });
+    expect(failed.now?.taskId).toBe("issue:issue-77");
+    expect(failed.now?.responseSpec?.kind).toBe("acknowledge");
+
+    await harness.emit(
+      "issue.updated",
+      {
+        title: "Issue run recovered",
+        status: "done",
+        summary: "The issue is done.",
+      },
+      { companyId: "company-run-issue", entityId: "issue-77", entityType: "issue" },
+    );
+
+    const recovered = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-run-issue" });
+    expect(recovered.now).toBeNull();
+    expect(recovered.next).toHaveLength(0);
+  });
+
+  it("keeps legacy non-approval approval frames acknowledgeable", () => {
+    const frame: StoredAttentionFrame = {
+      id: "frame:run:run-77:run-failed",
+      taskId: "run:run-77",
+      interactionId: "run:run-77:run-failed",
+      source: {
+        id: "paperclip:run",
+        kind: "paperclip",
+        label: "Paperclip run",
+      },
+      version: 1,
+      mode: "approval",
+      tone: "critical",
+      consequence: "high",
+      title: "Build failed",
+      summary: "The deploy pipeline crashed during tests.",
+      responseSpec: {
+        kind: "approval",
+        actions: [
+          { id: "approve", label: "Approve", kind: "approve", emphasis: "primary" },
+          { id: "reject", label: "Reject", kind: "reject", emphasis: "danger" },
+        ],
+      },
+      timing: {
+        createdAt: "2026-05-08T09:21:47.000Z",
+        updatedAt: "2026-05-08T09:21:47.000Z",
+      },
+    };
+
+    expect(responseKind(frame, "now")).toBe("acknowledge");
   });
 
   it("preserves budget override semantics for approval frames", async () => {

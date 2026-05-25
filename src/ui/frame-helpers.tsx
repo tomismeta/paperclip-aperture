@@ -196,7 +196,14 @@ export function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "app
     return "approval";
   }
 
-  if (lane !== "ambient" && (frame.responseSpec?.kind === "acknowledge" || frame.mode === "status")) {
+  if (
+    lane !== "ambient"
+    && (
+      frame.responseSpec?.kind === "acknowledge"
+      || frame.mode === "status"
+      || frame.responseSpec?.kind === "approval"
+    )
+  ) {
     return "acknowledge";
   }
 

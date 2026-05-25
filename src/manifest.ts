@@ -63,16 +63,27 @@ const manifest: PaperclipPluginManifestV1 = {
         routePath: "aperture"
       },
       {
-        type: "sidebar",
-        id: "attention-sidebar-link",
-        displayName: "Focus",
-        exportName: "AttentionSidebarLink"
-      },
-      {
         type: "dashboardWidget",
         id: "attention-widget",
         displayName: "Focus",
         exportName: "DashboardWidget"
+      }
+    ],
+    launchers: [
+      {
+        id: "focus-sidebar",
+        displayName: "Focus",
+        description: "Open the Paperclip Aperture Focus surface.",
+        placementZone: "sidebar",
+        order: 40,
+        action: {
+          type: "navigate",
+          target: "/aperture"
+        },
+        render: {
+          environment: "hostRoute",
+          bounds: "full"
+        }
       }
     ]
   }
