@@ -11,7 +11,7 @@ import {
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 
 function createIssue(overrides: Partial<Issue> = {}): Issue {
-  return {
+  const base: Issue = {
     id: "issue-1",
     companyId: "company-live",
     projectId: null,
@@ -21,6 +21,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     title: "Blocked rollout follow-up",
     description: "Need clarification from the operator before resuming the rollout.",
     status: "blocked",
+    workMode: "standard",
     priority: "high",
     assigneeAgentId: null,
     assigneeUserId: null,
@@ -44,14 +45,14 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     hiddenAt: null,
     createdAt: new Date("2026-03-18T10:00:00.000Z"),
     updatedAt: new Date("2026-03-19T10:00:00.000Z"),
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 function createIssueDocumentSummary(
   overrides: Partial<IssueDocumentSummary> = {},
 ): IssueDocumentSummary {
-  return {
+  const base: IssueDocumentSummary = {
     id: "document-1",
     companyId: "company-live",
     issueId: "issue-1",
@@ -64,10 +65,13 @@ function createIssueDocumentSummary(
     createdByUserId: "user-1",
     updatedByAgentId: null,
     updatedByUserId: "user-1",
+    lockedAt: null,
+    lockedByAgentId: null,
+    lockedByUserId: null,
     createdAt: new Date("2026-03-19T10:00:00.000Z"),
     updatedAt: new Date("2026-03-19T10:15:00.000Z"),
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 describe("issue-intelligence", () => {
@@ -129,5 +133,34 @@ describe("issue-intelligence", () => {
 
     expect(newerDocumentSignal.resolvesArtifactRequest).toBe(true);
     expect(olderDocumentSignal.resolvesArtifactRequest).toBe(false);
+  });
+
+  it("preserves document lock evidence when a locked artifact resolves a review request", () => {
+    const issue = createIssue({
+      status: "in_review",
+      title: "Review pricing experiment memo",
+      identifier: "APE-7",
+    });
+    const comment: LatestComment = {
+      body: "Can you share it with the board?",
+      updatedAt: "2026-03-19T10:05:00.000Z",
+    };
+    const analysis = analyzeIssueIntents(issue, comment);
+
+    const signal = analyzeIssueDocuments(
+      [
+        createIssueDocumentSummary({
+          lockedAt: new Date("2026-03-19T10:16:00.000Z"),
+          lockedByUserId: "user-1",
+        }),
+      ],
+      comment,
+      analysis,
+    );
+
+    expect(signal.resolvesArtifactRequest).toBe(true);
+    expect(signal.hasLockedDocuments).toBe(true);
+    expect(signal.latestDocumentLockedAt).toBe("2026-03-19T10:16:00.000Z");
+    expect(signal.latestDocumentLockOwnerKind).toBe("user");
   });
 });

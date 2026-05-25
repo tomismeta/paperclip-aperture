@@ -23,7 +23,7 @@ type IssueRelationSummary = Awaited<ReturnType<PluginIssuesClient["relations"]["
 type IssueRelationIssueSummary = IssueRelationSummary["blockedBy"][number];
 
 function createIssue(overrides: Partial<Issue> = {}): Issue {
-  return {
+  const base: Issue = {
     id: "issue-1",
     companyId: "company-live",
     projectId: null,
@@ -33,6 +33,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     title: "Blocked rollout follow-up",
     description: "Need clarification from the operator before resuming the rollout.",
     status: "blocked",
+    workMode: "standard",
     priority: "high",
     assigneeAgentId: null,
     assigneeUserId: null,
@@ -56,22 +57,25 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     hiddenAt: null,
     createdAt: new Date("2026-03-18T10:00:00.000Z"),
     updatedAt: new Date("2026-03-19T10:00:00.000Z"),
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 function createIssueComment(overrides: Partial<IssueComment> = {}): IssueComment {
-  return {
+  const base: IssueComment = {
     id: "comment-1",
     companyId: "company-live",
     issueId: "issue-1",
+    authorType: "user",
     authorAgentId: null,
     authorUserId: "user-1",
     body: "Need clarification on whether we should proceed with the customer-visible fix.",
+    presentation: null,
+    metadata: null,
     createdAt: new Date("2026-03-19T10:05:00.000Z"),
     updatedAt: new Date("2026-03-19T10:05:00.000Z"),
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 function createAgent(overrides: Partial<Agent> = {}): Agent {
@@ -103,7 +107,7 @@ function createAgent(overrides: Partial<Agent> = {}): Agent {
 }
 
 function createIssueDocumentSummary(overrides: Partial<IssueDocumentSummary> = {}): IssueDocumentSummary {
-  return {
+  const base: IssueDocumentSummary = {
     id: "document-1",
     companyId: "company-live",
     issueId: "issue-1",
@@ -116,10 +120,13 @@ function createIssueDocumentSummary(overrides: Partial<IssueDocumentSummary> = {
     createdByUserId: "user-1",
     updatedByAgentId: null,
     updatedByUserId: "user-1",
+    lockedAt: null,
+    lockedByAgentId: null,
+    lockedByUserId: null,
     createdAt: new Date("2026-03-19T10:00:00.000Z"),
     updatedAt: new Date("2026-03-19T10:15:00.000Z"),
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 function createIssueRelationSummary(overrides: Partial<IssueRelationIssueSummary> = {}): IssueRelationIssueSummary {
@@ -131,6 +138,81 @@ function createIssueRelationSummary(overrides: Partial<IssueRelationIssueSummary
     priority: "high",
     assigneeAgentId: null,
     assigneeUserId: null,
+    ...overrides,
+  };
+}
+
+function createBlockedInboxAttention(
+  overrides: Partial<NonNullable<Issue["blockedInboxAttention"]>> = {},
+): NonNullable<Issue["blockedInboxAttention"]> {
+  return {
+    kind: "blocked",
+    state: "awaiting_decision",
+    reason: "pending_board_decision",
+    severity: "high",
+    stoppedSinceAt: "2026-03-19T10:12:00.000Z",
+    owner: {
+      type: "board",
+      agentId: null,
+      userId: null,
+      label: "Board",
+    },
+    action: {
+      label: "Decide rollout path",
+      detail: "Board needs to decide whether the launch can proceed.",
+    },
+    sourceIssue: {
+      id: "issue-1",
+      identifier: "CAM-9",
+      title: "Blocked rollout follow-up",
+      status: "blocked",
+      priority: "high",
+      assigneeAgentId: null,
+      assigneeUserId: null,
+    },
+    leafIssue: null,
+    recoveryIssue: null,
+    approvalId: null,
+    interactionId: "interaction-1",
+    sampleIssueIdentifier: "CAM-9",
+    redaction: {
+      externalDetailsRedacted: false,
+      secretFieldsOmitted: true,
+    },
+    ...overrides,
+  };
+}
+
+function createRecoveryAction(
+  overrides: Partial<NonNullable<Issue["activeRecoveryAction"]>> = {},
+): NonNullable<Issue["activeRecoveryAction"]> {
+  return {
+    id: "recovery-1",
+    companyId: "company-live",
+    sourceIssueId: "issue-1",
+    recoveryIssueId: null,
+    kind: "missing_disposition",
+    status: "active",
+    ownerType: "board",
+    ownerAgentId: null,
+    ownerUserId: null,
+    previousOwnerAgentId: null,
+    returnOwnerAgentId: null,
+    cause: "Run finished without a final issue disposition.",
+    fingerprint: "missing-disposition:issue-1",
+    evidence: {},
+    nextAction: "Decide whether the completed run restored the issue.",
+    wakePolicy: null,
+    monitorPolicy: null,
+    attemptCount: 1,
+    maxAttempts: 3,
+    timeoutAt: null,
+    lastAttemptAt: "2026-03-19T10:11:00.000Z",
+    outcome: null,
+    resolutionNote: null,
+    resolvedAt: null,
+    createdAt: "2026-03-19T10:10:00.000Z",
+    updatedAt: "2026-03-19T10:11:00.000Z",
     ...overrides,
   };
 }
@@ -814,6 +896,101 @@ describe("paperclip aperture", () => {
     }));
   });
 
+  it("uses Paperclip blocked inbox attention as first-class focus evidence", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [
+        createIssue({
+          blockedInboxAttention: createBlockedInboxAttention(),
+        }),
+      ],
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+
+    expect(snapshot.now?.taskId).toBe("issue:issue-1");
+    expect(snapshot.now?.summary).toBe("Board needs to decide whether the launch can proceed.");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "needs-action-from")?.value).toBe("Board");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe("Decide rollout path");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "blocked-reason")?.value).toBe("Pending Board Decision");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "blocked-severity")?.value).toBe("High");
+    expect(snapshot.now?.provenance?.factors).toEqual(expect.arrayContaining([
+      "blocked inbox",
+      "pending board decision",
+      "high urgency",
+    ]));
+    expect(snapshot.now?.metadata).toEqual(expect.objectContaining({
+      issueWorkMode: "standard",
+      blockedInboxAttention: expect.objectContaining({
+        state: "awaiting_decision",
+        reason: "pending_board_decision",
+        severity: "high",
+        action: expect.objectContaining({
+          label: "Decide rollout path",
+        }),
+      }),
+    }));
+  });
+
+  it("keeps planning-mode blocked issues out of Now unless the host marks them urgent", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-19T10:01:00.000Z"));
+    const harness = createTestHarness({ manifest });
+    try {
+      await plugin.definition.setup(harness.ctx);
+      harness.seed({
+        issues: [
+          createIssue({
+            priority: "critical",
+            workMode: "planning",
+          }),
+        ],
+      });
+
+      const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+
+      expect(snapshot.now).toBeNull();
+      expect(snapshot.next).toHaveLength(0);
+      expect(snapshot.ambient[0]?.taskId).toBe("issue:issue-1");
+      expect(snapshot.ambient[0]?.metadata?.issueWorkMode).toBe("planning");
+      expect(snapshot.ambient[0]?.context?.items?.find((item) => item.id === "issue-work-mode")?.value).toBe("Planning");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces active Paperclip recovery actions directly in Focus", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [
+        createIssue({
+          activeRecoveryAction: createRecoveryAction(),
+        }),
+      ],
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+
+    expect(snapshot.now?.taskId).toBe("issue:issue-1");
+    expect(snapshot.now?.summary).toBe(
+      "Paperclip opened a missing disposition recovery action: Decide whether the completed run restored the issue.",
+    );
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "needs-action-from")?.value).toBe("Board");
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "recommended-move")?.value).toBe(
+      "Decide whether the completed run restored the issue.",
+    );
+    expect(snapshot.now?.context?.items?.find((item) => item.id === "recovery-action")?.value).toBe("Missing Disposition");
+    expect(snapshot.now?.metadata).toEqual(expect.objectContaining({
+      activeRecoveryAction: expect.objectContaining({
+        id: "recovery-1",
+        kind: "missing_disposition",
+        status: "active",
+      }),
+    }));
+  });
+
   it("reconciles blocked issues when host comment timestamps are ISO strings", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
@@ -1083,6 +1260,62 @@ describe("paperclip aperture", () => {
           { kind: "supersedes", target: "issue:issue-1" },
         ],
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves locked document handoff evidence in reconciled review frames", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-19T10:17:00.000Z"));
+    const harness = createTestHarness({ manifest });
+    try {
+      await plugin.definition.setup(harness.ctx);
+      harness.seed({
+        issues: [
+          createIssue({
+            status: "in_review",
+            priority: "high",
+            identifier: "APE-7",
+            title: "Review pricing experiment memo",
+          }),
+        ],
+        issueComments: [
+          createIssueComment({
+            body: "I don't actually see the actual memo. Can you share it with the board?",
+            createdAt: new Date("2026-03-19T10:05:00.000Z"),
+            updatedAt: new Date("2026-03-19T10:05:00.000Z"),
+          }),
+        ],
+      });
+      harness.ctx.issues.documents.list = vi.fn(async () => [
+        createIssueDocumentSummary({
+          issueId: "issue-1",
+          updatedAt: new Date("2026-03-19T10:15:00.000Z"),
+          lockedAt: new Date("2026-03-19T10:16:00.000Z"),
+          lockedByUserId: "user-1",
+        }),
+      ]);
+
+      const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+
+      expect(snapshot.ambient[0]?.summary).toBe(
+        "The requested memo is attached and locked, so review should be able to continue from the preserved snapshot.",
+      );
+      expect(snapshot.ambient[0]?.context?.items?.find((item) => item.id === "document-lock")?.value).toBe(
+        "Locked snapshot by user",
+      );
+      expect(snapshot.ambient[0]?.provenance?.whyNow).toBe(
+        "Pricing experiment memo was attached and locked after the request, so the missing artifact appears preserved for review.",
+      );
+      expect(snapshot.ambient[0]?.metadata?.attention).toEqual({
+        rationale: ["document attached", "document locked", "review can proceed"],
+      });
+      expect(snapshot.ambient[0]?.metadata?.issueDocuments).toEqual(expect.objectContaining({
+        hasLockedDocuments: true,
+        latestDocumentLockedAt: "2026-03-19T10:16:00.000Z",
+        latestDocumentLockOwnerKind: "user",
+      }));
     } finally {
       vi.useRealTimers();
     }
@@ -1715,6 +1948,10 @@ describe("paperclip aperture", () => {
     const commentCallsAfterFirstRead = listComments.mock.calls.length;
     const documentCallsAfterFirstRead = listDocuments.mock.calls.length;
     const approvalCallsAfterFirstRead = (harness.ctx.http.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(listIssues.mock.calls).toEqual(expect.arrayContaining([
+      [expect.objectContaining({ status: "blocked", includePluginOperations: false })],
+      [expect.objectContaining({ status: "in_review", includePluginOperations: false })],
+    ]));
 
     await harness.getData("attention-display", { companyId: "company-live" });
 

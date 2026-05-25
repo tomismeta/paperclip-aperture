@@ -1,6 +1,6 @@
 {
   "name": "@tomismeta/paperclip-aperture",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "type": "module",
   "private": false,
   "description": "The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.",
@@ -54,7 +54,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "2026.428.0",
+    "@paperclipai/plugin-sdk": "2026.517.0",
     "@tomismeta/aperture-core": "0.7.0"
   },
   "devDependencies": {

@@ -51,8 +51,12 @@ export type IssueActorDirectory = {
 
 export type IssueDocumentSignal = {
   hasDocuments: boolean;
+  hasLockedDocuments: boolean;
   latestDocumentTitle: string | null;
   latestDocumentUpdatedAt: string | null;
+  latestDocumentLockedAt: string | null;
+  latestDocumentLockOwnerKind: "agent" | "user" | null;
+  latestDocumentLockOwnerId: string | null;
   resolvesArtifactRequest: boolean;
 };
 
@@ -273,12 +277,18 @@ export function analyzeIssueDocuments(
 ): IssueDocumentSignal {
   const latest = latestIssueDocument(documents);
   const latestUpdatedAt = toIsoString(latest?.updatedAt);
+  const latestLockedAt = toIsoString(latest?.lockedAt);
   const commentUpdatedAt = comment?.updatedAt ?? null;
+  const lockedDocuments = documents.filter((document) => !!document.lockedAt);
 
   return {
     hasDocuments: documents.length > 0,
+    hasLockedDocuments: lockedDocuments.length > 0,
     latestDocumentTitle: latest?.title ?? null,
     latestDocumentUpdatedAt: latestUpdatedAt,
+    latestDocumentLockedAt: latestLockedAt,
+    latestDocumentLockOwnerKind: latest?.lockedByAgentId ? "agent" : latest?.lockedByUserId ? "user" : null,
+    latestDocumentLockOwnerId: latest?.lockedByAgentId ?? latest?.lockedByUserId ?? null,
     resolvesArtifactRequest:
       hasIntent(analysis, "share_with_board")
       && !!latest
@@ -294,7 +304,9 @@ export function issueRecommendedMove(
   const normalized = analysis.text.replace(/\s+/g, " ").trim();
 
   if (documentSignal?.resolvesArtifactRequest) {
-    return "Monitor the review now that the memo is attached.";
+    return documentSignal.latestDocumentLockedAt
+      ? "Monitor the locked review snapshot now that the memo is attached."
+      : "Monitor the review now that the memo is attached.";
   }
 
   if (hasIntent(analysis, "resolution")) {
@@ -338,7 +350,9 @@ export function issueHeadline(
   documentSignal?: IssueDocumentSignal,
 ): string {
   if (documentSignal?.resolvesArtifactRequest) {
-    return "The requested memo appears attached, so review should be able to continue.";
+    return documentSignal.latestDocumentLockedAt
+      ? "The requested memo is attached and locked, so review should be able to continue from the preserved snapshot."
+      : "The requested memo appears attached, so review should be able to continue.";
   }
 
   if (hasIntent(analysis, "resolution")) {
@@ -386,9 +400,15 @@ export function issueWhyNow(
   if (documentSignal?.resolvesArtifactRequest) {
     return {
       whyNow: documentSignal.latestDocumentTitle
-        ? `${documentSignal.latestDocumentTitle} was attached after the request, so the missing artifact appears resolved.`
-        : "A review document was attached after the request, so the missing artifact appears resolved.",
-      factors: ["document attached", "review can proceed"],
+        ? documentSignal.latestDocumentLockedAt
+          ? `${documentSignal.latestDocumentTitle} was attached and locked after the request, so the missing artifact appears preserved for review.`
+          : `${documentSignal.latestDocumentTitle} was attached after the request, so the missing artifact appears resolved.`
+        : documentSignal.latestDocumentLockedAt
+          ? "A review document was attached and locked after the request, so the missing artifact appears preserved for review."
+          : "A review document was attached after the request, so the missing artifact appears resolved.",
+      factors: documentSignal.latestDocumentLockedAt
+        ? ["document attached", "document locked", "review can proceed"]
+        : ["document attached", "review can proceed"],
     };
   }
 

@@ -16,6 +16,11 @@ export const ATTENTION_CONTEXT_IDS = {
   recommendedMove: "recommended-move",
   issueStatus: "issue-status",
   issuePriority: "issue-priority",
+  issueWorkMode: "issue-work-mode",
+  blockedReason: "blocked-reason",
+  blockedSeverity: "blocked-severity",
+  recoveryAction: "recovery-action",
+  documentLock: "document-lock",
   latestComment: "latest-comment",
   agentStatus: "agent-status",
   pauseReason: "pause-reason",
@@ -76,6 +81,26 @@ export function issueStatusItem(value: string): AttentionContextItem {
 
 export function issuePriorityItem(value: string): AttentionContextItem {
   return item(ATTENTION_CONTEXT_IDS.issuePriority, "Priority", value);
+}
+
+export function issueWorkModeItem(value: string): AttentionContextItem {
+  return item(ATTENTION_CONTEXT_IDS.issueWorkMode, "Mode", value);
+}
+
+export function blockedReasonItem(value: string): AttentionContextItem {
+  return item(ATTENTION_CONTEXT_IDS.blockedReason, "Blocked reason", value);
+}
+
+export function blockedSeverityItem(value: string): AttentionContextItem {
+  return item(ATTENTION_CONTEXT_IDS.blockedSeverity, "Severity", value);
+}
+
+export function recoveryActionItem(value: string): AttentionContextItem {
+  return item(ATTENTION_CONTEXT_IDS.recoveryAction, "Recovery", value);
+}
+
+export function documentLockItem(value: string): AttentionContextItem {
+  return item(ATTENTION_CONTEXT_IDS.documentLock, "Document lock", value);
 }
 
 export function latestCommentItem(value: string): AttentionContextItem {

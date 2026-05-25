@@ -43,6 +43,7 @@ function createIssue(input: CorpusFixture["issue"]): Issue {
     title: input.title,
     description: input.description,
     status: input.status,
+    workMode: "standard",
     priority: "high",
     assigneeAgentId: null,
     assigneeUserId: null,

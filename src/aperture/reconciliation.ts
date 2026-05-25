@@ -6,13 +6,19 @@ import {
   agentStatusItem,
   agentTitleItem,
   blockedByItem,
+  blockedReasonItem,
+  blockedSeverityItem,
   blocksTargetItem,
+  documentLockItem,
   issuePriorityItem,
   issueStatusItem,
+  issueWorkModeItem,
   latestCommentItem,
   needsActionFromItem,
   pauseReasonItem,
   recommendedMoveItem,
+  recoveryActionItem,
+  humanizeToken,
 } from "./attention-context.js";
 import { mergeStoredFrames, type FrameLane, type StoredFrameCandidate } from "./frame-model.js";
 import {
@@ -39,6 +45,8 @@ import { withFocusDecisionMetadata } from "./contracts.js";
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 type IssueRelationSummary = Awaited<ReturnType<PluginIssuesClient["relations"]["get"]>>;
 type IssueRelationIssueSummary = IssueRelationSummary["blockedBy"][number];
+type BlockedInboxAttention = NonNullable<Issue["blockedInboxAttention"]>;
+type ActiveRecoveryAction = NonNullable<Issue["activeRecoveryAction"]>;
 
 const COMMENT_LOOKUP_CONCURRENCY = 6;
 const ISSUE_LIST_TTL_MS = 15_000;
@@ -70,6 +78,183 @@ function toTimestamp(value: Date | string | null | undefined): number {
   if (value instanceof Date) return value.getTime();
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function toIsoStringOrNull(value: Date | string | null | undefined): string | null {
+  return toIsoString(value) ?? null;
+}
+
+function humanizeLower(value: string): string {
+  return humanizeToken(value).toLowerCase();
+}
+
+function isOpenRecoveryAction(action: ActiveRecoveryAction | null | undefined): action is ActiveRecoveryAction {
+  return action?.status === "active" || action?.status === "escalated";
+}
+
+function issueReferenceLabel(issue: Pick<IssueRelationIssueSummary, "identifier" | "title"> | null | undefined): string | null {
+  if (!issue) return null;
+  return issue.identifier ? `${issue.identifier} ${issue.title}` : issue.title;
+}
+
+function blockedInboxOwnerLabel(attention: BlockedInboxAttention): string | null {
+  const label = attention.owner.label?.trim();
+  if (label) return label;
+  if (attention.owner.type === "unknown") return null;
+  return humanizeToken(attention.owner.type);
+}
+
+function recoveryOwnerLabel(action: ActiveRecoveryAction | null | undefined): string | null {
+  if (!isOpenRecoveryAction(action)) return null;
+  if (action.ownerType === "system") return "System";
+  if (action.ownerType === "board") return "Board";
+  if (action.ownerType === "agent") return action.ownerAgentId ? `Agent ${action.ownerAgentId}` : "Agent";
+  return action.ownerUserId ? `User ${action.ownerUserId}` : "User";
+}
+
+function blockedInboxRecommendedMove(attention: BlockedInboxAttention): string | null {
+  return attention.action.label || attention.action.detail;
+}
+
+function recoveryRecommendedMove(action: ActiveRecoveryAction | null | undefined): string | null {
+  if (!isOpenRecoveryAction(action)) return null;
+  return action.nextAction || `Resolve the ${humanizeLower(action.kind)} recovery action.`;
+}
+
+function blockedInboxSummary(attention: BlockedInboxAttention): string {
+  if (attention.action.detail) return truncate(attention.action.detail);
+  if (attention.action.label) return truncate(attention.action.label);
+
+  const issueLabel = issueReferenceLabel(attention.leafIssue ?? attention.sourceIssue);
+  if (issueLabel) return `${issueLabel} needs attention before this blocked issue can move.`;
+
+  return `Paperclip marked this blocked issue as ${humanizeLower(attention.state)}.`;
+}
+
+function recoverySummary(action: ActiveRecoveryAction): string {
+  const nextAction = action.nextAction ? `: ${truncate(action.nextAction, 140)}` : ".";
+  return `Paperclip opened a ${humanizeLower(action.kind)} recovery action${nextAction}`;
+}
+
+function blockedInboxProvenance(attention: BlockedInboxAttention): { whyNow: string; factors: string[] } {
+  const action = attention.action.detail || attention.action.label;
+  return {
+    whyNow: action
+      ? `Paperclip Blocked Inbox marks this as ${humanizeLower(attention.severity)} urgency for ${humanizeLower(attention.reason)}: ${truncate(action, 140)}`
+      : `Paperclip Blocked Inbox marks this as ${humanizeLower(attention.severity)} urgency for ${humanizeLower(attention.reason)}.`,
+    factors: [
+      "blocked inbox",
+      humanizeLower(attention.reason),
+      `${humanizeLower(attention.severity)} urgency`,
+    ],
+  };
+}
+
+function recoveryProvenance(action: ActiveRecoveryAction): { whyNow: string; factors: string[] } {
+  return {
+    whyNow: action.nextAction
+      ? `Paperclip has an ${humanizeLower(action.status)} ${humanizeLower(action.kind)} recovery action: ${truncate(action.nextAction, 140)}`
+      : `Paperclip has an ${humanizeLower(action.status)} ${humanizeLower(action.kind)} recovery action.`,
+    factors: ["recovery action", humanizeLower(action.kind), humanizeLower(action.status)],
+  };
+}
+
+function blockedInboxConsequence(attention: BlockedInboxAttention): "low" | "medium" | "high" {
+  if (attention.severity === "critical" || attention.severity === "high") return "high";
+  if (attention.severity === "medium") return "medium";
+  return "low";
+}
+
+function issueConsequence(issue: Issue, lane: FrameLane): "low" | "medium" | "high" {
+  if (issue.blockedInboxAttention) return blockedInboxConsequence(issue.blockedInboxAttention);
+  if (issue.activeRecoveryAction?.status === "escalated") return "high";
+  if (issue.activeRecoveryAction?.status === "active" && issue.priority === "critical") return "high";
+  if (issue.status === "blocked") return priorityConsequence(issue);
+  return lane === "ambient" ? "low" : "medium";
+}
+
+function issueTone(issue: Issue, lane: FrameLane): StoredAttentionFrame["tone"] {
+  if (issue.blockedInboxAttention?.severity === "critical") return "critical";
+  if (issue.activeRecoveryAction?.status === "escalated") return "critical";
+  if (issue.status === "blocked") return "focused";
+  return lane === "ambient" ? "ambient" : "focused";
+}
+
+function blockedInboxIssueLabel(attention: BlockedInboxAttention): string | null {
+  return issueReferenceLabel(attention.leafIssue ?? attention.sourceIssue);
+}
+
+function issueDocumentLockLabel(signal: IssueDocumentSignal): string | null {
+  if (!signal.latestDocumentLockedAt) return null;
+  const owner = signal.latestDocumentLockOwnerKind
+    ? ` by ${signal.latestDocumentLockOwnerKind}`
+    : "";
+  return `Locked snapshot${owner}`;
+}
+
+function issueReferenceMetadata(issue: BlockedInboxAttention["sourceIssue"]): Record<string, unknown> | null {
+  if (!issue) return null;
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    status: issue.status,
+    priority: issue.priority,
+    assigneeAgentId: issue.assigneeAgentId,
+    assigneeUserId: issue.assigneeUserId,
+  };
+}
+
+function blockedInboxMetadata(attention: BlockedInboxAttention): Record<string, unknown> {
+  return {
+    state: attention.state,
+    reason: attention.reason,
+    severity: attention.severity,
+    stoppedSinceAt: attention.stoppedSinceAt,
+    owner: attention.owner,
+    action: attention.action,
+    sourceIssue: issueReferenceMetadata(attention.sourceIssue),
+    leafIssue: issueReferenceMetadata(attention.leafIssue),
+    recoveryIssue: issueReferenceMetadata(attention.recoveryIssue),
+    approvalId: attention.approvalId,
+    interactionId: attention.interactionId,
+    sampleIssueIdentifier: attention.sampleIssueIdentifier,
+    redaction: attention.redaction,
+  };
+}
+
+function recoveryMetadata(action: ActiveRecoveryAction): Record<string, unknown> {
+  return {
+    id: action.id,
+    kind: action.kind,
+    status: action.status,
+    ownerType: action.ownerType,
+    ownerAgentId: action.ownerAgentId,
+    ownerUserId: action.ownerUserId,
+    cause: action.cause,
+    nextAction: action.nextAction,
+    attemptCount: action.attemptCount,
+    maxAttempts: action.maxAttempts,
+    timeoutAt: toIsoStringOrNull(action.timeoutAt),
+    lastAttemptAt: toIsoStringOrNull(action.lastAttemptAt),
+    outcome: action.outcome,
+    resolvedAt: toIsoStringOrNull(action.resolvedAt),
+    updatedAt: toIsoStringOrNull(action.updatedAt),
+  };
+}
+
+function documentSignalMetadata(signal: IssueDocumentSignal): Record<string, unknown> | null {
+  if (!signal.hasDocuments) return null;
+  return {
+    hasDocuments: signal.hasDocuments,
+    hasLockedDocuments: signal.hasLockedDocuments,
+    latestDocumentTitle: signal.latestDocumentTitle,
+    latestDocumentUpdatedAt: signal.latestDocumentUpdatedAt,
+    latestDocumentLockedAt: signal.latestDocumentLockedAt,
+    latestDocumentLockOwnerKind: signal.latestDocumentLockOwnerKind,
+    latestDocumentLockOwnerId: signal.latestDocumentLockOwnerId,
+    resolvesArtifactRequest: signal.resolvesArtifactRequest,
+  };
 }
 
 function acknowledgeResponseSpec() {
@@ -108,13 +293,35 @@ function priorityConsequence(issue: Issue): "low" | "medium" | "high" {
 }
 
 function issueLane(issue: Issue, comment: LatestComment, evidence: IssueFrameEvidence): FrameLane | null {
+  if (issue.blockedInboxAttention) {
+    const attention = issue.blockedInboxAttention;
+    if (
+      attention.severity === "critical"
+      || attention.severity === "high"
+      || attention.state === "needs_attention"
+      || attention.state === "recovery_open"
+      || attention.state === "missing_disposition"
+    ) {
+      return "now";
+    }
+    return "next";
+  }
+
+  if (issue.activeRecoveryAction?.status === "escalated") return "now";
+  if (isOpenRecoveryAction(issue.activeRecoveryAction)) {
+    return issue.priority === "critical" || issue.priority === "high" ? "now" : "next";
+  }
+
   if (
     (issue.status === "blocked" || issue.status === "in_review")
     && (hasIntent(evidence.analysis, "resolution") || evidence.documentSignal.resolvesArtifactRequest)
   ) {
     return comment || issue.isUnreadForMe || evidence.documentSignal.hasDocuments ? "ambient" : null;
   }
-  if (issue.status === "blocked") return issue.priority === "critical" ? "now" : "next";
+  if (issue.status === "blocked") {
+    if (issue.workMode === "planning") return "ambient";
+    return issue.priority === "critical" ? "now" : "next";
+  }
   if (issue.status === "in_review") return "next";
   if (comment || issue.isUnreadForMe) return "ambient";
   return null;
@@ -163,6 +370,11 @@ function relationMetadata(relations: IssueRelationSummary | null): Record<string
 }
 
 function issueSummary(issue: Issue, evidence: IssueFrameEvidence): string {
+  if (issue.blockedInboxAttention) return blockedInboxSummary(issue.blockedInboxAttention);
+  if (isOpenRecoveryAction(issue.activeRecoveryAction)) {
+    return recoverySummary(issue.activeRecoveryAction);
+  }
+
   const blocker = primaryUnresolvedBlocker(evidence.relations);
   if (blocker) return `${relationIssueLabel(blocker)} is a tracked blocker for this issue.`;
 
@@ -170,6 +382,11 @@ function issueSummary(issue: Issue, evidence: IssueFrameEvidence): string {
 }
 
 function issueProvenance(issue: Issue, evidence: IssueFrameEvidence) {
+  if (issue.blockedInboxAttention) return blockedInboxProvenance(issue.blockedInboxAttention);
+  if (isOpenRecoveryAction(issue.activeRecoveryAction)) {
+    return recoveryProvenance(issue.activeRecoveryAction);
+  }
+
   const base = issueWhyNow(issue, evidence.analysis, evidence.documentSignal);
   const blocker = primaryUnresolvedBlocker(evidence.relations);
   if (!blocker) return base;
@@ -186,7 +403,14 @@ function issueAttentionTimestamp(
   comment: LatestComment,
   documentSignal: IssueDocumentSignal,
 ): string {
-  const commentSignals = [comment?.updatedAt, toIsoString(issue.lastExternalCommentAt), documentSignal.latestDocumentUpdatedAt]
+  const commentSignals = [
+    comment?.updatedAt,
+    toIsoString(issue.lastExternalCommentAt),
+    documentSignal.latestDocumentUpdatedAt,
+    documentSignal.latestDocumentLockedAt,
+    issue.blockedInboxAttention?.stoppedSinceAt,
+    toIsoString(issue.activeRecoveryAction?.updatedAt),
+  ]
     .filter((value): value is string => !!value)
     .sort();
   if (commentSignals.length > 0) return commentSignals.at(-1) as string;
@@ -211,13 +435,25 @@ function issueFrame(
 
   const updatedAt = issueAttentionTimestamp(issue, comment, documentSignal);
   const provenance = issueProvenance(issue, evidence);
-  const owner = hasIntent(analysis, "resolution") || documentSignal.resolvesArtifactRequest ? null : analysis.owner;
-  const move = issueRecommendedMove(issue, analysis, documentSignal);
+  const owner = hasIntent(analysis, "resolution") || documentSignal.resolvesArtifactRequest
+    ? null
+    : issue.blockedInboxAttention
+      ? blockedInboxOwnerLabel(issue.blockedInboxAttention)
+      : recoveryOwnerLabel(issue.activeRecoveryAction)
+        ?? analysis.owner;
+  const move = issue.blockedInboxAttention
+    ? blockedInboxRecommendedMove(issue.blockedInboxAttention)
+    : recoveryRecommendedMove(issue.activeRecoveryAction)
+      ?? issueRecommendedMove(issue, analysis, documentSignal);
   const target = analysis.blockingTarget;
   const semantic = semanticMetadata(analysis.semanticConfidence, analysis.relationHints);
   const taskId = createTaskId("issue", issue.id);
-  const blockedBy = relationContextLabel(relations);
+  const blockedBy = issue.blockedInboxAttention
+    ? blockedInboxIssueLabel(issue.blockedInboxAttention)
+    : relationContextLabel(relations);
   const relationsMetadata = relationMetadata(relations);
+  const documentLock = issueDocumentLockLabel(documentSignal);
+  const documentMetadata = documentSignalMetadata(documentSignal);
 
   return {
     lane,
@@ -232,8 +468,8 @@ function issueFrame(
       },
       version: 1,
       mode: "status",
-      tone: issue.status === "blocked" ? "focused" : lane === "ambient" ? "ambient" : "focused",
-      consequence: issue.status === "blocked" ? priorityConsequence(issue) : lane === "ambient" ? "low" : "medium",
+      tone: issueTone(issue, lane),
+      consequence: issueConsequence(issue, lane),
       title: issueTitle(issue),
       summary: issueSummary(issue, evidence),
       context: {
@@ -242,8 +478,15 @@ function issueFrame(
           ...(blockedBy ? [blockedByItem(blockedBy)] : []),
           ...(target ? [blocksTargetItem(target)] : []),
           ...(move ? [recommendedMoveItem(move)] : []),
+          ...(issue.blockedInboxAttention ? [
+            blockedReasonItem(humanizeToken(issue.blockedInboxAttention.reason)),
+            blockedSeverityItem(humanizeToken(issue.blockedInboxAttention.severity)),
+          ] : []),
+          ...(isOpenRecoveryAction(issue.activeRecoveryAction) ? [recoveryActionItem(humanizeToken(issue.activeRecoveryAction.kind))] : []),
+          ...(documentLock ? [documentLockItem(documentLock)] : []),
           issueStatusItem(issue.status.replace(/_/g, " ")),
           issuePriorityItem(issue.priority),
+          issueWorkModeItem(humanizeToken(issue.workMode)),
           ...(comment ? [latestCommentItem(comment.body)] : []),
         ],
       },
@@ -253,28 +496,32 @@ function issueFrame(
         createdAt: toIsoString(issue.createdAt) ?? updatedAt,
         updatedAt,
       },
-        metadata: {
-          entityType: "issue",
-          issueStatus: issue.status,
-          issuePriority: issue.priority,
-          liveReconciled: true,
-          activityPath: comment ? "activity" : undefined,
-          attention: {
-            rationale: provenance.factors ?? [],
-          },
-          issueIntelligence: {
-            matchedRuleIds: analysis.matchedRuleIds,
-            owner: analysis.owner,
-            ownerKind: analysis.ownerKind,
-            blockingTarget: analysis.blockingTarget,
-          },
-          ...(relationsMetadata ? { issueRelations: relationsMetadata } : {}),
-          ...(semantic ? { semantic } : {}),
+      metadata: {
+        entityType: "issue",
+        issueStatus: issue.status,
+        issuePriority: issue.priority,
+        issueWorkMode: issue.workMode,
+        liveReconciled: true,
+        activityPath: comment ? "activity" : undefined,
+        attention: {
+          rationale: provenance.factors ?? [],
         },
+        issueIntelligence: {
+          matchedRuleIds: analysis.matchedRuleIds,
+          owner: analysis.owner,
+          ownerKind: analysis.ownerKind,
+          blockingTarget: analysis.blockingTarget,
+        },
+        ...(issue.blockedInboxAttention ? { blockedInboxAttention: blockedInboxMetadata(issue.blockedInboxAttention) } : {}),
+        ...(issue.activeRecoveryAction ? { activeRecoveryAction: recoveryMetadata(issue.activeRecoveryAction) } : {}),
+        ...(documentMetadata ? { issueDocuments: documentMetadata } : {}),
+        ...(relationsMetadata ? { issueRelations: relationsMetadata } : {}),
+        ...(semantic ? { semantic } : {}),
+      },
     }, {
       owner: "paperclip_reconciliation",
       lane,
-      sourcePolicy: `issue.${issue.status}.${issue.priority}`,
+      sourcePolicy: `issue.${issue.status}.${issue.priority}.${issue.workMode}`,
       rationale: provenance.factors ?? [],
     }),
   };
@@ -465,7 +712,7 @@ async function loadIssuesForStatus(
   options?: { freshHostData?: boolean },
 ): Promise<Issue[]> {
   return cachedRead(store, companyId, `issues:${status}`, ISSUE_LIST_TTL_MS, { fresh: options?.freshHostData }, async () => (
-    await ctx.issues.list({ companyId, status, limit: 25 })
+    await ctx.issues.list({ companyId, status, includePluginOperations: false, limit: 25 })
   ));
 }
 
