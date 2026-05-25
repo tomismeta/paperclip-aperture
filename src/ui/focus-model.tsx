@@ -1,8 +1,6 @@
-import { usePluginData, usePluginStream } from "@paperclipai/plugin-sdk/ui";
+import { usePluginData } from "@paperclipai/plugin-sdk/ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AttentionDisplayPayload, AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "../aperture/types.js";
-
-const ATTENTION_UPDATES_STREAM = "attention-updates";
 
 export type QueueMovement = "up" | "down";
 
@@ -175,17 +173,8 @@ export function useAttentionModel(companyId: string | null | undefined): {
   refresh: () => void;
 } {
   const displayQuery = usePluginData<AttentionDisplayPayload>("attention-display", companyId ? { companyId } : undefined);
-  const updates = usePluginStream<{ updatedAt: string; eventType: string }>(
-    ATTENTION_UPDATES_STREAM,
-    companyId ? { companyId } : undefined,
-  );
 
   useAttentionPolling(companyId, [displayQuery.refresh]);
-
-  useEffect(() => {
-    if (!companyId || !updates.lastEvent) return;
-    displayQuery.refresh();
-  }, [companyId, updates.lastEvent?.updatedAt, updates.lastEvent?.eventType]);
 
   return useMemo(() => ({
     snapshot: displayQuery.data?.snapshot ?? null,

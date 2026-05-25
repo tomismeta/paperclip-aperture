@@ -260,19 +260,16 @@ function mockApprovalApi(
 }
 
 describe("paperclip aperture", () => {
-  it("declares a host-rendered Focus sidebar launcher", () => {
-    expect(manifest.ui?.slots?.some((slot) => slot.type === "sidebar")).toBe(false);
-    expect(manifest.ui?.launchers).toEqual(expect.arrayContaining([
+  it("declares the Focus sidebar entry with its custom UI", () => {
+    expect(manifest.ui?.slots).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        id: "focus-sidebar",
+        type: "sidebar",
+        id: "attention-sidebar-link",
         displayName: "Focus",
-        placementZone: "sidebar",
-        action: expect.objectContaining({
-          type: "navigate",
-          target: "/aperture",
-        }),
+        exportName: "AttentionSidebarLink",
       }),
     ]));
+    expect(manifest.ui?.launchers ?? []).toHaveLength(0);
   });
 
   it("maps approval events into attention state and clears them on acknowledgement", async () => {

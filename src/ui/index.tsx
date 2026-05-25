@@ -1,5 +1,6 @@
 import {
   type PluginPageProps,
+  type PluginSidebarProps,
   type PluginWidgetProps,
 } from "@paperclipai/plugin-sdk/ui";
 import { useEffect, useMemo, useState } from "react";
@@ -16,6 +17,7 @@ import {
   GENERIC_QUEUED_JUDGMENT,
 } from "../aperture/attention-language.js";
 import {
+  ACCENT_BG_STYLE,
   ACCENT_BORDER,
   ACCENT_COLOR,
   Accent,
@@ -33,6 +35,7 @@ import {
   useWideLayout,
 } from "./chrome.js";
 import {
+  actionableCount,
   actionableLabel,
   currentSurfaceBrand,
   formatRelativeTime,
@@ -44,6 +47,7 @@ import {
   type SurfaceBrand,
   useAttentionModel,
   useQueueMovement,
+  unreadCount,
 } from "./focus-model.js";
 import {
   approvalIdForFrame,
@@ -756,6 +760,73 @@ export function DashboardWidget(props: PluginWidgetProps) {
       ) : (
         <div className="mt-2 text-sm text-muted-foreground">No active interruption right now.</div>
       )}
+    </a>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar link — Paperclip launcher chrome with the original Focus glyph
+// ---------------------------------------------------------------------------
+
+export function AttentionSidebarLink({ context }: PluginSidebarProps) {
+  const companyId = context.companyId;
+  const brand = currentSurfaceBrand();
+  const href = pluginPagePath(context.companyPrefix);
+  const isActive = typeof window !== "undefined" && window.location.pathname === href;
+  const model = useAttentionModel(companyId);
+  const merged = model.snapshot;
+  const actionable = merged ? actionableCount(merged) : 0;
+  const unread = unreadCount(merged);
+
+  return (
+    <a
+      href={href}
+      aria-current={isActive ? "page" : undefined}
+      className={cn(
+        "flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors",
+        isActive
+          ? "bg-accent text-foreground"
+          : "text-foreground/80 hover:bg-accent/50 hover:text-foreground",
+      )}
+    >
+      <span className="relative shrink-0" aria-hidden="true">
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.9"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="9" />
+          <path d="m14.3 8 5.2 9" />
+          <path d="M9.7 8h10.4" />
+          <path d="m7.4 12 5.2-9" />
+          <path d="m9.7 16-5.2-9" />
+          <path d="M14.3 16H3.9" />
+          <path d="m16.6 12-5.2 9" />
+        </svg>
+        {unread > 0 ? (
+          <span
+            className="absolute -right-1 -top-1 h-2 w-2 rounded-full"
+            style={{ backgroundColor: ACCENT_COLOR }}
+          />
+        ) : null}
+      </span>
+      <span className="flex-1 truncate">{brand.wordmark}</span>
+      {actionable > 0 ? (
+        <span className="inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-xs leading-none font-medium text-white" style={ACCENT_BG_STYLE}>
+          {actionable}
+        </span>
+      ) : unread > 0 ? (
+        <span
+          className="inline-flex items-center justify-center rounded-full border px-1.5 py-0.5 text-xs leading-none font-medium"
+          style={{ color: ACCENT_COLOR, borderColor: ACCENT_BORDER, backgroundColor: "transparent" }}
+        >
+          {unread}
+        </span>
+      ) : null}
     </a>
   );
 }

@@ -48,7 +48,7 @@ After install, open Paperclip and use the `Focus` entry in the sidebar.
 
 ## Troubleshooting
 
-- If the sidebar shows a bordered placeholder instead of a native `Focus` entry, upgrade to Paperclip `2026.517.0` or newer and reinstall this plugin. `0.4.5` declares a host-rendered sidebar launcher instead of a custom sidebar slot.
+- If the sidebar shows a bordered placeholder instead of the `Focus` entry, upgrade to Paperclip `2026.525.0` or newer and reinstall this plugin. `0.4.5` preserves the original Focus sidebar icon and uses the current host invocation scope.
 - `paperclipApiBase` is only needed for approval overlays. Use the Paperclip origin such as `https://HOST` or `http://127.0.0.1:3100`; leaving it empty disables approval overlay reads without disabling Focus.
 - On Windows, `spawn npm ENOENT` during `npx paperclipai plugin install @tomismeta/paperclip-aperture` comes from the Paperclip host installer failing to spawn npm. This package does not spawn npm during install. Make sure the Paperclip process can resolve `npm.cmd`, or upgrade Paperclip once the Windows installer fix is available.
 
@@ -132,7 +132,7 @@ For `0.4.x`, the boundary works like this:
 - `activity.logged` document events invalidate stale reconciled state so document-backed review blockers refresh promptly without a full browser-side merge layer
 - Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
 
-The plugin requires Paperclip `2026.517.0` or newer and has been validated against [`@tomismeta/aperture-core@0.7.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.517.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
+The plugin requires Paperclip `2026.525.0` or newer and has been validated against [`@tomismeta/aperture-core@0.7.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.525.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
 
 Approval overlay transport is opt-in until the Paperclip plugin SDK exposes a first-class approval client. Set the plugin config field `paperclipApiBase` when the worker can reach the host approval API; leave it empty to run Focus without approval overlays in hosted or restricted-network environments.
 

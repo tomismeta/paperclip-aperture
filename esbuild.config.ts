@@ -9,20 +9,23 @@ if (!worker || !manifest || !ui) {
   throw new Error("Plugin bundler presets are missing required esbuild targets.");
 }
 
-function buildOptions(options: esbuild.BuildOptions): esbuild.BuildOptions {
+function buildOptions(
+  options: esbuild.BuildOptions,
+  buildTarget: "manifest" | "ui" | "worker",
+): esbuild.BuildOptions {
   if (watch) return options;
 
   return {
     ...options,
     legalComments: "none",
-    minify: true,
+    minify: buildTarget !== "ui",
     sourcemap: false,
   };
 }
 
-const workerContext = await esbuild.context(buildOptions(worker));
-const manifestContext = await esbuild.context(buildOptions(manifest));
-const uiContext = await esbuild.context(buildOptions(ui));
+const workerContext = await esbuild.context(buildOptions(worker, "worker"));
+const manifestContext = await esbuild.context(buildOptions(manifest, "manifest"));
+const uiContext = await esbuild.context(buildOptions(ui, "ui"));
 
 if (watch) {
   await Promise.all([

@@ -4,7 +4,7 @@ const manifest: PaperclipPluginManifestV1 = {
   id: "tomismeta.paperclip-aperture",
   apiVersion: 1,
   version: "0.4.5",
-  minimumHostVersion: "2026.517.0",
+  minimumHostVersion: "2026.525.0",
   displayName: "Paperclip Aperture",
   description: "The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.",
   author: "@tomismeta",
@@ -63,27 +63,16 @@ const manifest: PaperclipPluginManifestV1 = {
         routePath: "aperture"
       },
       {
+        type: "sidebar",
+        id: "attention-sidebar-link",
+        displayName: "Focus",
+        exportName: "AttentionSidebarLink"
+      },
+      {
         type: "dashboardWidget",
         id: "attention-widget",
         displayName: "Focus",
         exportName: "DashboardWidget"
-      }
-    ],
-    launchers: [
-      {
-        id: "focus-sidebar",
-        displayName: "Focus",
-        description: "Open the Paperclip Aperture Focus surface.",
-        placementZone: "sidebar",
-        order: 40,
-        action: {
-          type: "navigate",
-          target: "/aperture"
-        },
-        render: {
-          environment: "hostRoute",
-          bounds: "full"
-        }
       }
     ]
   }
