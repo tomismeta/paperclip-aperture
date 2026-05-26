@@ -48,7 +48,9 @@ After install, open Paperclip and use the `Focus` entry in the sidebar.
 
 ## Troubleshooting
 
-- If the sidebar shows a bordered placeholder instead of the `Focus` entry, upgrade to Paperclip `2026.525.0` or newer and reinstall this plugin. `0.4.5` preserves the original Focus sidebar icon and uses the current host invocation scope.
+- If the sidebar shows a bordered placeholder instead of the `Focus` entry, upgrade to Paperclip `2026.525.0` or newer and reinstall this plugin. `0.4.6` preserves the original Focus sidebar icon and uses the current host invocation scope.
+- On Paperclip `2026.525.0`, install the package without a version suffix: `npx paperclipai plugin install @tomismeta/paperclip-aperture`. The host installer currently checks the wrong package directory for scoped packages with an explicit version suffix.
+- `0.4.6` intentionally does not declare `minimumHostVersion` in the manifest because Paperclip `2026.525.0` reports `0.0.0` to the plugin loader during install. The plugin still requires Paperclip `2026.525.0` or newer at runtime.
 - `paperclipApiBase` is only needed for approval overlays. Use the Paperclip origin such as `https://HOST` or `http://127.0.0.1:3100`; leaving it empty disables approval overlay reads without disabling Focus.
 - On Windows, `spawn npm ENOENT` during `npx paperclipai plugin install @tomismeta/paperclip-aperture` comes from the Paperclip host installer failing to spawn npm. This package does not spawn npm during install. Make sure the Paperclip process can resolve `npm.cmd`, or upgrade Paperclip once the Windows installer fix is available.
 

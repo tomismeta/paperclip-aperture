@@ -272,6 +272,11 @@ describe("paperclip aperture", () => {
     expect(manifest.ui?.launchers ?? []).toHaveLength(0);
   });
 
+  it("does not declare a host-version gate while Paperclip 2026.525 reports 0.0.0 at install time", () => {
+    expect(manifest.minimumHostVersion).toBeUndefined();
+    expect(manifest.minimumPaperclipVersion).toBeUndefined();
+  });
+
   it("maps approval events into attention state and clears them on acknowledgement", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
