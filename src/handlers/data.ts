@@ -7,7 +7,7 @@ import {
 } from "../aperture/persisted-state.js";
 import { loadReconciledCandidates } from "../aperture/reconciliation.js";
 import { buildOverlayDiagnostics } from "../aperture/overlay-diagnostics.js";
-import { mergeStoredFrames } from "../aperture/frame-model.js";
+import { mergeStoredFrames, type StoredFrameCandidate } from "../aperture/frame-model.js";
 import {
   type AttentionCoreDiagnostics,
   type AttentionDisplayPayload,
@@ -180,72 +180,92 @@ type HydratedAttentionState = {
   reviewState: AttentionReviewState;
 };
 
+function isInvocationScopeDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("invocation scope") || message.includes("not allowed to perform");
+}
+
+function inMemoryAttentionState(
+  store: ApertureCompanyStore,
+  companyId: string,
+): HydratedAttentionState {
+  return {
+    baseLedger: store.getLedger(companyId),
+    snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+    reviewState: store.getReview(companyId) ?? createEmptyReviewState(companyId),
+  };
+}
+
 async function ensureAttentionState(
   ctx: PluginContext,
   store: ApertureCompanyStore,
   companyId: string,
 ): Promise<HydratedAttentionState> {
   if (store.hasSession(companyId)) {
-    const liveSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
-    return {
-      baseLedger: store.getLedger(companyId),
-      snapshot: liveSnapshot,
-      reviewState: store.getReview(companyId) ?? createEmptyReviewState(companyId),
-    };
+    return inMemoryAttentionState(store, companyId);
   }
 
-  const persistedState = await loadPersistedAttentionState(ctx, companyId);
-  if (persistedState) {
-    const { snapshot } = store.hydrate(companyId, {
-      ledger: persistedState.ledger,
-      snapshot: persistedState.snapshot,
-      review: persistedState.review,
+  try {
+    const persistedState = await loadPersistedAttentionState(ctx, companyId);
+    if (persistedState) {
+      const { snapshot } = store.hydrate(companyId, {
+        ledger: persistedState.ledger,
+        snapshot: persistedState.snapshot,
+        review: persistedState.review,
+      });
+
+      return {
+        baseLedger: persistedState.ledger,
+        snapshot,
+        reviewState: persistedState.review,
+      };
+    }
+
+    const persistedLedgerValue = await ctx.state.get({
+      scopeKind: "company",
+      scopeId: companyId,
+      stateKey: ATTENTION_LEDGER_STATE_KEY,
     });
-
-    return {
-      baseLedger: persistedState.ledger,
-      snapshot,
-      reviewState: persistedState.review,
-    };
-  }
-
-  const persistedLedgerValue = await ctx.state.get({
-    scopeKind: "company",
-    scopeId: companyId,
-    stateKey: ATTENTION_LEDGER_STATE_KEY,
-  });
-  const persistedSnapshotValue = await ctx.state.get({
-    scopeKind: "company",
-    scopeId: companyId,
-    stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
-  });
-  const persistedReviewValue = await ctx.state.get({
-    scopeKind: "company",
-    scopeId: companyId,
-    stateKey: ATTENTION_REVIEW_STATE_KEY,
-  });
-  const baseLedger = isAttentionLedger(persistedLedgerValue)
-    ? persistedLedgerValue
-    : createEmptyLedger();
-  const persistedSnapshot = normalizeAttentionSnapshot(companyId, persistedSnapshotValue);
-  const reviewState = deriveReviewStateFromLedger(
-    companyId,
-    baseLedger,
-    isAttentionReviewState(persistedReviewValue, companyId) ? persistedReviewValue : null,
-  );
-  const { snapshot } = store.hydrate(companyId, {
-    ledger: baseLedger,
-    snapshot: persistedSnapshot,
-    review: reviewState,
-  });
-
-  if (!isAttentionLedger(persistedLedgerValue) && persistedSnapshot) {
-    ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", {
+    const persistedSnapshotValue = await ctx.state.get({
+      scopeKind: "company",
+      scopeId: companyId,
+      stateKey: ATTENTION_SNAPSHOT_STATE_KEY,
+    });
+    const persistedReviewValue = await ctx.state.get({
+      scopeKind: "company",
+      scopeId: companyId,
+      stateKey: ATTENTION_REVIEW_STATE_KEY,
+    });
+    const baseLedger = isAttentionLedger(persistedLedgerValue)
+      ? persistedLedgerValue
+      : createEmptyLedger();
+    const persistedSnapshot = normalizeAttentionSnapshot(companyId, persistedSnapshotValue);
+    const reviewState = deriveReviewStateFromLedger(
       companyId,
+      baseLedger,
+      isAttentionReviewState(persistedReviewValue, companyId) ? persistedReviewValue : null,
+    );
+    const { snapshot } = store.hydrate(companyId, {
+      ledger: baseLedger,
+      snapshot: persistedSnapshot,
+      review: reviewState,
     });
-  }
 
-  return { baseLedger, snapshot, reviewState };
+    if (!isAttentionLedger(persistedLedgerValue) && persistedSnapshot) {
+      ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", {
+        companyId,
+      });
+    }
+
+    return { baseLedger, snapshot, reviewState };
+  } catch (error) {
+    if (!isInvocationScopeDenied(error)) throw error;
+    ctx.logger.warn("Aperture persisted state unavailable in this host callback; using in-memory attention state.", {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return inMemoryAttentionState(store, companyId);
+  }
 }
 
 function reconciliationCacheKey(
@@ -275,9 +295,19 @@ async function loadReconciledAttentionSnapshot(
     if (cachedCandidates) return mergeStoredFrames(snapshot, companyId, cachedCandidates, reviewState);
   }
 
-  const candidates = await loadReconciledCandidates(ctx, store, companyId, config, {
-    freshHostData: options.freshHostData,
-  });
+  let candidates: StoredFrameCandidate[];
+  try {
+    candidates = await loadReconciledCandidates(ctx, store, companyId, config, {
+      freshHostData: options.freshHostData,
+    });
+  } catch (error) {
+    if (!isInvocationScopeDenied(error)) throw error;
+    ctx.logger.warn("Aperture host reconciliation unavailable in this host callback; using current attention snapshot.", {
+      companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return snapshot;
+  }
   const reconciled = mergeStoredFrames(snapshot, companyId, candidates, reviewState);
   if (options.preferCache && !options.freshHostData) {
     store.setCachedReconciledCandidates(companyId, cacheKey, candidates);

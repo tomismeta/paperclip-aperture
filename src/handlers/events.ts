@@ -3,7 +3,6 @@ import { normalizeSourceEvent } from "@tomismeta/aperture-core/semantic";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import { mapPluginEventToAperture, mapPluginEventToSourceEvent } from "../aperture/event-mapper.js";
 import type { AttentionLedgerEventEntry } from "../aperture/types.js";
-import { emitAttentionUpdate, runAttentionMutation } from "./shared.js";
 
 const SUBSCRIBED_EVENTS: readonly string[] = [
   "activity.logged",
@@ -28,7 +27,6 @@ const ATTENTION_ACTIVITY_ACTIONS = new Set([
   "issue.document_updated",
   "issue.document_deleted",
 ]);
-const ISSUE_ENRICH_TTL_MS = 10_000;
 
 function shouldCaptureEvent(
   config: Record<string, unknown>,
@@ -56,38 +54,9 @@ async function enrichIssuePayload(
   store: ApertureCompanyStore,
   event: PluginEvent,
 ): Promise<PluginEvent> {
-  if (event.entityType !== "issue" || !event.entityId) return event;
-  const payload =
-    event.payload && typeof event.payload === "object"
-      ? (event.payload as Record<string, unknown>)
-      : {};
-
-  try {
-    const cacheKey = `issue:${event.entityId}:detail`;
-    const issue = store.getCachedHostValue<Awaited<ReturnType<typeof ctx.issues.get>>>(event.companyId, cacheKey)
-      ?? await ctx.issues.get(event.entityId, event.companyId);
-    if (!issue) return event;
-    store.setCachedHostValue(event.companyId, cacheKey, issue, ISSUE_ENRICH_TTL_MS);
-
-    return {
-      ...event,
-      payload: {
-        ...payload,
-        title: typeof payload.title === "string" ? payload.title : issue.title,
-        issueTitle: typeof payload.issueTitle === "string" ? payload.issueTitle : issue.title,
-        identifier: typeof payload.identifier === "string" ? payload.identifier : issue.identifier,
-        description: typeof payload.description === "string" ? payload.description : issue.description,
-        status: typeof payload.status === "string" ? payload.status : issue.status,
-      },
-    };
-  } catch (error) {
-    ctx.logger.warn("Failed to enrich issue payload for Aperture", {
-      issueId: event.entityId,
-      eventType: event.eventType,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return event;
-  }
+  void ctx;
+  void store;
+  return event;
 }
 
 async function handleEvent(
@@ -115,18 +84,6 @@ async function handleEvent(
           "issues:blocked",
           "issues:in_review",
         ],
-      });
-      emitAttentionUpdate(ctx, {
-        companyId: event.companyId,
-        reason: "event",
-        eventType: `activity.${action}`,
-        updatedAt: event.occurredAt,
-        counts: store.getSnapshot(event.companyId)?.counts ?? {
-          now: 0,
-          next: 0,
-          ambient: 0,
-          total: 0,
-        },
       });
       ctx.logger.info("Triggered Focus refresh from activity log event", {
         companyId: event.companyId,
@@ -175,17 +132,7 @@ async function handleEvent(
     apertureEvent: mapped,
   };
 
-  const { snapshot } = await runAttentionMutation(ctx, store, enriched.companyId, () => {
-    const { ledger, snapshot } = store.applyEvent(enriched.companyId, ledgerEntry);
-    return { ledger, snapshot };
-  });
-  emitAttentionUpdate(ctx, {
-    companyId: enriched.companyId,
-    reason: "event",
-    eventType: enriched.eventType,
-    updatedAt: snapshot.updatedAt,
-    counts: snapshot.counts,
-  });
+  store.applyEvent(enriched.companyId, ledgerEntry);
   ctx.logger.info("Captured Paperclip event for Aperture", {
     companyId: enriched.companyId,
     eventType: enriched.eventType,
