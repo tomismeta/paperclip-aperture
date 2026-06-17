@@ -131,6 +131,7 @@ For `0.4.x`, the boundary works like this:
 - typed Paperclip issue blocker relations are preserved as Focus context/provenance/metadata so Aperture has better dependency facts without the plugin inventing dependency routing
 - `activity.logged` document events invalidate stale reconciled state so document-backed review blockers refresh promptly without a full browser-side merge layer
 - Paperclip `agent.error_cleared` events invalidate reconciled agent state, and redacted deleted comments are ignored when Focus chooses the latest operator signal
+- subscribed event callbacks stay memory-only and flush pending Aperture state from the next scoped data/action bridge call, keeping host invocation scope boundaries intact without losing replay durability after Focus refreshes
 - Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
 
 The plugin requires Paperclip `2026.525.0` or newer and has been validated against [`@tomismeta/aperture-core@0.7.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.609.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).

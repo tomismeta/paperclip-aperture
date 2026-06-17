@@ -47,6 +47,7 @@ type CompanySession = {
   snapshot: AttentionSnapshot | null;
   ledger: AttentionLedger;
   review: AttentionReviewState;
+  pendingPersistence: boolean;
   eventCount: number;
   traces: ApertureTrace[];
   reconciledCandidates: CachedCandidates | null;
@@ -186,6 +187,30 @@ export class ApertureCompanyStore {
     if (!session) return null;
     this.touchSession(session);
     return session.review;
+  }
+
+  hasPendingPersistence(companyId: string): boolean {
+    return this.sessions.get(companyId)?.pendingPersistence ?? false;
+  }
+
+  markPersistencePending(companyId: string): void {
+    const session = this.ensureSession(companyId);
+    session.pendingPersistence = true;
+  }
+
+  getPersistableState(companyId: string): {
+    ledger: AttentionLedger;
+    snapshot: AttentionSnapshot;
+    review: AttentionReviewState;
+  } | null {
+    const session = this.sessions.get(companyId);
+    if (!session) return null;
+    this.touchSession(session);
+    return {
+      ledger: this.getLedger(companyId),
+      snapshot: this.syncSnapshotFromCore(companyId, session),
+      review: session.review,
+    };
   }
 
   setReview(companyId: string, review: AttentionReviewState): AttentionReviewState {
@@ -345,6 +370,7 @@ export class ApertureCompanyStore {
   markPersistenceHealthy(companyId: string): void {
     const session = this.sessions.get(companyId);
     if (!session) return;
+    session.pendingPersistence = false;
     session.persistence = {
       state: "healthy",
       updatedAt: new Date().toISOString(),
@@ -620,6 +646,7 @@ export class ApertureCompanyStore {
       snapshot: null,
       ledger: createEmptyLedger(),
       review: createEmptyReviewState(companyId),
+      pendingPersistence: false,
       eventCount: 0,
       traces: [],
       reconciledCandidates: null,

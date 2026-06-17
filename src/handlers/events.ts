@@ -3,7 +3,6 @@ import { normalizeSourceEvent } from "@tomismeta/aperture-core/semantic";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import { mapPluginEventToAperture, mapPluginEventToSourceEvent } from "../aperture/event-mapper.js";
 import type { AttentionLedgerEventEntry } from "../aperture/types.js";
-import { emitAttentionUpdate, runAttentionMutation } from "./shared.js";
 
 const SUBSCRIBED_EVENTS: readonly string[] = [
   "activity.logged",
@@ -29,7 +28,8 @@ const ATTENTION_ACTIVITY_ACTIONS = new Set([
   "issue.document_updated",
   "issue.document_deleted",
 ]);
-const ISSUE_ENRICH_TTL_MS = 10_000;
+
+type EventConfigProvider = () => Record<string, unknown>;
 
 function shouldCaptureEvent(
   config: Record<string, unknown>,
@@ -52,51 +52,12 @@ function shouldCaptureEvent(
   return true;
 }
 
-async function enrichIssuePayload(
-  ctx: PluginContext,
-  store: ApertureCompanyStore,
-  event: PluginEvent,
-): Promise<PluginEvent> {
-  if (event.entityType !== "issue" || !event.entityId) return event;
-  const payload =
-    event.payload && typeof event.payload === "object"
-      ? (event.payload as Record<string, unknown>)
-      : {};
-
-  try {
-    const cacheKey = `issue:${event.entityId}:detail`;
-    const issue = store.getCachedHostValue<Awaited<ReturnType<typeof ctx.issues.get>>>(event.companyId, cacheKey)
-      ?? await ctx.issues.get(event.entityId, event.companyId);
-    if (!issue) return event;
-    store.setCachedHostValue(event.companyId, cacheKey, issue, ISSUE_ENRICH_TTL_MS);
-
-    return {
-      ...event,
-      payload: {
-        ...payload,
-        title: typeof payload.title === "string" ? payload.title : issue.title,
-        issueTitle: typeof payload.issueTitle === "string" ? payload.issueTitle : issue.title,
-        identifier: typeof payload.identifier === "string" ? payload.identifier : issue.identifier,
-        description: typeof payload.description === "string" ? payload.description : issue.description,
-        status: typeof payload.status === "string" ? payload.status : issue.status,
-      },
-    };
-  } catch (error) {
-    ctx.logger.warn("Failed to enrich issue payload for Aperture", {
-      issueId: event.entityId,
-      eventType: event.eventType,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return event;
-  }
-}
-
 async function handleEvent(
   ctx: PluginContext,
   store: ApertureCompanyStore,
   event: PluginEvent,
+  config: Record<string, unknown>,
 ): Promise<void> {
-  const config = await ctx.config.get();
   if (!shouldCaptureEvent(config, event.eventType)) return;
 
   if (event.eventType === "activity.logged") {
@@ -116,18 +77,6 @@ async function handleEvent(
           "issues:blocked",
           "issues:in_review",
         ],
-      });
-      emitAttentionUpdate(ctx, {
-        companyId: event.companyId,
-        reason: "event",
-        eventType: `activity.${action}`,
-        updatedAt: event.occurredAt,
-        counts: store.getSnapshot(event.companyId)?.counts ?? {
-          now: 0,
-          next: 0,
-          ambient: 0,
-          total: 0,
-        },
       });
       ctx.logger.info("Triggered Focus refresh from activity log event", {
         companyId: event.companyId,
@@ -154,7 +103,7 @@ async function handleEvent(
     });
   }
 
-  const enriched = await enrichIssuePayload(ctx, store, event);
+  const enriched = event;
   const sourceEvent = mapPluginEventToSourceEvent(enriched);
   const mapped = sourceEvent ? normalizeSourceEvent(sourceEvent) : mapPluginEventToAperture(enriched);
   if (!mapped) return;
@@ -176,17 +125,8 @@ async function handleEvent(
     apertureEvent: mapped,
   };
 
-  const { snapshot } = await runAttentionMutation(ctx, store, enriched.companyId, () => {
-    const { ledger, snapshot } = store.applyEvent(enriched.companyId, ledgerEntry);
-    return { ledger, snapshot };
-  });
-  emitAttentionUpdate(ctx, {
-    companyId: enriched.companyId,
-    reason: "event",
-    eventType: enriched.eventType,
-    updatedAt: snapshot.updatedAt,
-    counts: snapshot.counts,
-  });
+  store.applyEvent(enriched.companyId, ledgerEntry);
+  store.markPersistencePending(enriched.companyId);
   ctx.logger.info("Captured Paperclip event for Aperture", {
     companyId: enriched.companyId,
     eventType: enriched.eventType,
@@ -195,10 +135,14 @@ async function handleEvent(
   });
 }
 
-export function registerEventHandlers(ctx: PluginContext, store: ApertureCompanyStore): void {
+export function registerEventHandlers(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  getConfig: EventConfigProvider = () => ({}),
+): void {
   for (const eventName of SUBSCRIBED_EVENTS) {
     ctx.events.on(eventName as never, async (event) => {
-      await handleEvent(ctx, store, event as PluginEvent);
+      await handleEvent(ctx, store, event as PluginEvent, getConfig());
     });
   }
 }

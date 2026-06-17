@@ -311,6 +311,52 @@ describe("paperclip aperture", () => {
     ]));
   });
 
+  it("flushes event-derived attention state from the next scoped data read", async () => {
+    const firstHarness = createTestHarness({ manifest });
+    await plugin.definition.setup(firstHarness.ctx);
+
+    await firstHarness.emit(
+      "approval.created",
+      {
+        type: "approve_ceo_strategy",
+        title: "Approve deferred event persistence",
+        summary: "A deployment event should persist from the next data bridge call.",
+      },
+      { companyId: "company-deferred-persist", entityId: "approval-deferred-1", entityType: "approval" },
+    );
+
+    expect(firstHarness.getState({
+      scopeKind: "company",
+      scopeId: "company-deferred-persist",
+      stateKey: ATTENTION_STATE_KEY,
+    })).toBeUndefined();
+
+    const snapshot = await firstHarness.getData<AttentionSnapshot>("attention-summary", {
+      companyId: "company-deferred-persist",
+    });
+    expect(snapshot.now?.title).toBe("Approve deferred event persistence");
+
+    const persistedState = firstHarness.getState({
+      scopeKind: "company",
+      scopeId: "company-deferred-persist",
+      stateKey: ATTENTION_STATE_KEY,
+    });
+    expect((persistedState as { payload?: { ledger?: unknown[] } })?.payload?.ledger).toHaveLength(1);
+
+    const secondHarness = createTestHarness({ manifest });
+    await plugin.definition.setup(secondHarness.ctx);
+    await secondHarness.ctx.state.set(
+      { scopeKind: "company", scopeId: "company-deferred-persist", stateKey: ATTENTION_STATE_KEY },
+      persistedState,
+    );
+
+    const rebuilt = await secondHarness.getData<AttentionSnapshot>("attention-summary", {
+      companyId: "company-deferred-persist",
+    });
+    expect(rebuilt.now?.title).toBe("Approve deferred event persistence");
+    expect(rebuilt.counts.now).toBe(1);
+  });
+
   it("exposes live core diagnostics for the active company session", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
@@ -826,6 +872,7 @@ describe("paperclip aperture", () => {
       { companyId: "company-legacy-envelope", entityId: "approval-legacy-1", entityType: "approval" },
     );
 
+    await firstHarness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-legacy-envelope" });
     const persistedState = firstHarness.getState({
       scopeKind: "company",
       scopeId: "company-legacy-envelope",

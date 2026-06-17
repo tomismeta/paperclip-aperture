@@ -42,6 +42,35 @@ export function requireCompanyId(params: Record<string, unknown>): string {
   return requireStringParam(params, "companyId");
 }
 
+export function isInvocationScopeDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("invocation scope") || message.includes("not allowed to perform");
+}
+
+async function runCompanyMutation<T>(
+  companyId: string,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  const prior = companyMutationQueue.get(companyId) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = prior.catch(() => undefined).then(() => gate);
+  companyMutationQueue.set(companyId, tail);
+
+  await prior.catch(() => undefined);
+
+  try {
+    return await mutation();
+  } finally {
+    release();
+    if (companyMutationQueue.get(companyId) === tail) {
+      companyMutationQueue.delete(companyId);
+    }
+  }
+}
+
 export async function persistSnapshot(
   ctx: PluginContext,
   companyId: string,
@@ -108,6 +137,40 @@ export function emitAttentionUpdate(
 ): void {
   ctx.streams.open(ATTENTION_UPDATES_STREAM, event.companyId);
   ctx.streams.emit(ATTENTION_UPDATES_STREAM, event);
+}
+
+export async function flushPendingAttentionState(
+  ctx: PluginContext,
+  store: ApertureCompanyStore,
+  companyId: string,
+): Promise<boolean> {
+  return runCompanyMutation(companyId, async () => {
+    if (!store.hasPendingPersistence(companyId)) return false;
+
+    const state = store.getPersistableState(companyId);
+    if (!state) return false;
+
+    try {
+      await persistAttentionState(ctx, companyId, state);
+      store.markPersistenceHealthy(companyId);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isInvocationScopeDenied(error)) {
+        ctx.logger.warn("Aperture pending state could not be persisted in this host callback; will retry from the next scoped invocation.", {
+          companyId,
+          error: message,
+        });
+      } else {
+        store.markPersistenceFault(companyId, message);
+        ctx.logger.warn("Failed to persist pending Aperture event state.", {
+          companyId,
+          error: message,
+        });
+      }
+      return false;
+    }
+  });
 }
 
 async function retryBestEffort(
@@ -195,53 +258,40 @@ export async function runAttentionMutation<T extends PersistedAttentionMutation>
   companyId: string,
   mutation: () => Promise<T> | T,
 ): Promise<T> {
-  const prior = companyMutationQueue.get(companyId) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const tail = prior.catch(() => undefined).then(() => gate);
-  companyMutationQueue.set(companyId, tail);
-
-  await prior.catch(() => undefined);
-
-  const persistedState = await loadPersistedAttentionState(ctx, companyId);
-  const previousLedger = store.getLedger(companyId);
-  const previousSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
-  const previousReview = store.getReview(companyId)
-    ?? persistedState?.review
-    ?? createEmptyReviewState(companyId);
-  const fallbackState = persistedState ?? {
-    companyId,
-    ledger: previousLedger,
-    snapshot: previousSnapshot,
-    review: previousReview,
-  };
-
-  try {
-    const result = await mutation();
+  return runCompanyMutation(companyId, async () => {
+    const persistedState = await loadPersistedAttentionState(ctx, companyId);
+    const previousLedger = store.getLedger(companyId);
+    const previousSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
+    const previousReview = store.getReview(companyId)
+      ?? persistedState?.review
+      ?? createEmptyReviewState(companyId);
+    const fallbackState = persistedState ?? {
+      companyId,
+      ledger: previousLedger,
+      snapshot: previousSnapshot,
+      review: previousReview,
+    };
 
     try {
-      if (result.review) store.setReview(companyId, result.review);
-      await persistAttentionState(ctx, companyId, {
-        ledger: result.ledger,
-        snapshot: result.snapshot,
-        review: result.review ?? store.getReview(companyId) ?? previousReview,
-      });
-      store.markPersistenceHealthy(companyId);
-      return result;
+      const result = await mutation();
+
+      try {
+        if (result.review) store.setReview(companyId, result.review);
+        await persistAttentionState(ctx, companyId, {
+          ledger: result.ledger,
+          snapshot: result.snapshot,
+          review: result.review ?? store.getReview(companyId) ?? previousReview,
+        });
+        store.markPersistenceHealthy(companyId);
+        return result;
+      } catch (error) {
+        store.restore(companyId, fallbackState);
+        store.markPersistenceFault(companyId, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
     } catch (error) {
       store.restore(companyId, fallbackState);
-      store.markPersistenceFault(companyId, error instanceof Error ? error.message : String(error));
       throw error;
     }
-  } catch (error) {
-    store.restore(companyId, fallbackState);
-    throw error;
-  } finally {
-    release();
-    if (companyMutationQueue.get(companyId) === tail) {
-      companyMutationQueue.delete(companyId);
-    }
-  }
+  });
 }
