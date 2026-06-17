@@ -21,6 +21,7 @@ const SUBSCRIBED_EVENTS: readonly string[] = [
   "agent.run.finished",
   "agent.run.cancelled",
   "agent.status_changed",
+  "agent.error_cleared",
 ] as const;
 
 const ATTENTION_ACTIVITY_ACTIONS = new Set([

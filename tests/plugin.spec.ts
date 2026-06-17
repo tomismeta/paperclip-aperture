@@ -916,6 +916,34 @@ describe("paperclip aperture", () => {
     expect(snapshot.review?.unread.total).toBeGreaterThan(0);
   });
 
+  it("ignores redacted deleted comments when choosing the latest issue signal", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      issues: [createIssue()],
+      issueComments: [
+        createIssueComment({
+          id: "comment-visible",
+          body: "Visible operator clarification should remain the latest signal.",
+          createdAt: new Date("2026-03-19T10:05:00.000Z"),
+          updatedAt: new Date("2026-03-19T10:05:00.000Z"),
+        }),
+        createIssueComment({
+          id: "comment-deleted",
+          body: "Deleted comment should not displace the useful signal.",
+          deletedAt: new Date("2026-03-19T10:15:00.000Z"),
+          createdAt: new Date("2026-03-19T10:10:00.000Z"),
+          updatedAt: new Date("2026-03-19T10:15:00.000Z"),
+        }),
+      ],
+    });
+
+    const snapshot = await harness.getData<AttentionSnapshot>("attention-summary", { companyId: "company-live" });
+    const latest = snapshot.now?.context?.items?.find((item) => item.id === "latest-comment")?.value;
+    expect(latest).toContain("Visible operator clarification");
+    expect(latest).not.toContain("Deleted comment");
+  });
+
   it("surfaces Paperclip issue blocker relations as first-class focus context", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);
@@ -2056,6 +2084,66 @@ describe("paperclip aperture", () => {
     expect(listIssues.mock.calls.length).toBeGreaterThan(issueCallsAfterFirstRead);
     expect(listComments.mock.calls.length).toBe(commentCallsAfterFirstRead);
     expect(listDocuments.mock.calls.length).toBeGreaterThan(documentCallsAfterFirstRead);
+  });
+
+  it("drops stale agent error focus when Paperclip clears the agent error", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+    harness.seed({
+      agents: [
+        createAgent({
+          companyId: "company-agent-clear",
+          status: "error",
+        }),
+      ],
+    });
+
+    const firstDisplay = await harness.getData<{ snapshot: AttentionSnapshot }>("attention-display", {
+      companyId: "company-agent-clear",
+    });
+    const firstFrames = [
+      ...(firstDisplay.snapshot.now ? [firstDisplay.snapshot.now] : []),
+      ...firstDisplay.snapshot.next,
+      ...firstDisplay.snapshot.ambient,
+    ];
+    expect(firstFrames.some((frame) => frame.taskId === "agent:agent-1")).toBe(true);
+
+    harness.seed({
+      agents: [
+        createAgent({
+          companyId: "company-agent-clear",
+          status: "idle",
+          updatedAt: new Date("2026-03-19T10:30:00.000Z"),
+        }),
+      ],
+    });
+    await harness.emit(
+      "agent.error_cleared",
+      { summary: "Atlas recovered after the failed run was cleared." },
+      { companyId: "company-agent-clear", entityId: "agent-1", entityType: "agent" },
+    );
+
+    const clearedDisplay = await harness.getData<{ snapshot: AttentionSnapshot }>("attention-display", {
+      companyId: "company-agent-clear",
+    });
+    const clearedFrames = [
+      ...(clearedDisplay.snapshot.now ? [clearedDisplay.snapshot.now] : []),
+      ...clearedDisplay.snapshot.next,
+      ...clearedDisplay.snapshot.ambient,
+    ];
+    expect(clearedFrames.find((frame) => frame.taskId === "agent:agent-1")).toBeUndefined();
+
+    const exported = await harness.getData<AttentionExport>("attention-export", {
+      companyId: "company-agent-clear",
+    });
+    expect(exported.eventEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: expect.objectContaining({
+          eventType: "agent.error_cleared",
+          entityId: "agent-1",
+        }),
+      }),
+    ]));
   });
 
   it("exports a lab-compatible replay scenario from the attention ledger", async () => {

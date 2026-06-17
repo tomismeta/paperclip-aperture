@@ -277,8 +277,9 @@ type IssueFrameEvidence = {
 };
 
 function latestComment(comments: IssueComment[]): LatestComment {
-  if (comments.length === 0) return null;
-  const newest = [...comments].sort(
+  const visibleComments = comments.filter((comment) => !comment.deletedAt);
+  if (visibleComments.length === 0) return null;
+  const newest = [...visibleComments].sort(
     (left, right) => toTimestamp(right.updatedAt) - toTimestamp(left.updatedAt),
   )[0];
   const updatedAt = toIsoString(newest.updatedAt) ?? toIsoString(newest.createdAt) ?? new Date(0).toISOString();

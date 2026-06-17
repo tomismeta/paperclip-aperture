@@ -29,7 +29,8 @@ type ExtendedPluginEventType =
   | "approval.approved"
   | "approval.rejected"
   | "approval.revision_requested"
-  | "issue.comment_added";
+  | "issue.comment_added"
+  | "agent.error_cleared";
 
 type MappablePluginEvent = Omit<PluginEvent, "eventType"> & {
   eventType: ExtendedPluginEventType;
@@ -510,6 +511,18 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         source,
         reason: readPayloadString(event.payload, "summary") ?? "Agent run cancelled",
       };
+
+    case "agent.error_cleared": {
+      const summary = readPayloadString(event.payload, "summary") ?? "The agent error state was cleared in Paperclip.";
+      return {
+        id: `${event.eventId}:error-cleared`,
+        type: "task.completed",
+        taskId,
+        timestamp: event.occurredAt,
+        source,
+        summary,
+      };
+    }
 
     case "agent.status_changed": {
       const status = readPayloadString(event.payload, "status")?.toLowerCase();
