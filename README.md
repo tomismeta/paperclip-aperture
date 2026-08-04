@@ -134,8 +134,9 @@ For `0.4.x`, the boundary works like this:
 - Paperclip `agent.error_cleared` events invalidate reconciled agent state, and redacted deleted comments are ignored when Focus chooses the latest operator signal
 - subscribed event callbacks stay memory-only and flush pending Aperture state from the next scoped data/action bridge call, keeping host invocation scope boundaries intact without losing replay durability after Focus refreshes
 - Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
+- Aperture Core `0.8.x` semantic and judgment hardening is consumed through this existing `ApertureCore` integration; the plugin does not run the newer Core `./kernel` subpath as a second runtime judgment system
 
-The plugin requires Paperclip `2026.525.0` or newer and has been validated against [`@tomismeta/aperture-core@0.7.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.707.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
+The plugin requires Paperclip `2026.525.0` or newer and has been validated against [`@tomismeta/aperture-core@0.8.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.707.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
 
 Approval overlay transport is opt-in until the Paperclip plugin SDK exposes a first-class approval client. Set the plugin config field `paperclipApiBase` when the worker can reach the host approval API; leave it empty to run Focus without approval overlays in hosted or restricted-network environments.
 

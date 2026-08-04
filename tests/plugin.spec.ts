@@ -690,7 +690,7 @@ describe("paperclip aperture", () => {
       kind: "same_issue",
       target: "issue:issue-99",
     });
-    expect(blockingIssueEntry?.apertureEvent.semantic?.confidence).toBe("high");
+    expect(blockingIssueEntry?.apertureEvent.semantic?.confidence).toBe("medium");
     expect(blockingIssueEntry?.apertureEvent.semantic?.relationHints).toContainEqual({
       kind: "same_issue",
       target: "issue:issue-99",
