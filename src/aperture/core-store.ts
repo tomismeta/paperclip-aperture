@@ -70,6 +70,28 @@ const RECONCILED_CANDIDATE_TTL_MS = 15_000;
 
 export class ApertureCompanyStore {
   private readonly sessions = new Map<string, CompanySession>();
+  private readonly inFlightLoads = new Map<string, Promise<unknown>>();
+
+  runSingleFlight<T>(
+    companyId: string,
+    namespace: string,
+    key: string,
+    loader: () => Promise<T>,
+  ): Promise<T> {
+    const flightKey = JSON.stringify([companyId, namespace, key]);
+    const current = this.inFlightLoads.get(flightKey);
+    if (current) return current as Promise<T>;
+
+    const flight = Promise.resolve().then(loader);
+    this.inFlightLoads.set(flightKey, flight);
+    const clear = () => {
+      if (this.inFlightLoads.get(flightKey) === flight) {
+        this.inFlightLoads.delete(flightKey);
+      }
+    };
+    void flight.then(clear, clear);
+    return flight;
+  }
 
   getHealth() {
     return {

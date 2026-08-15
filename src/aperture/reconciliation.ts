@@ -704,12 +704,21 @@ async function cachedRead<T>(
   options: { fresh?: boolean } | undefined,
   loader: () => Promise<T>,
 ): Promise<T> {
-  if (!options?.fresh) {
-    const cached = store.getCachedHostValue<T>(companyId, key);
-    if (cached !== null) return cached;
+  if (options?.fresh) {
+    const value = await loader();
+    return store.setCachedHostValue(companyId, key, value, ttlMs);
   }
-  const value = await loader();
-  return store.setCachedHostValue(companyId, key, value, ttlMs);
+
+  const cached = store.getCachedHostValue<T>(companyId, key);
+  if (cached !== null) return cached;
+
+  const hostDataRevision = store.getReconciledRevision(companyId);
+  const flightKey = JSON.stringify([hostDataRevision, key]);
+  return store.runSingleFlight(companyId, "host-value", flightKey, async () => {
+    const value = await loader();
+    if (store.getReconciledRevision(companyId) !== hostDataRevision) return value;
+    return store.setCachedHostValue(companyId, key, value, ttlMs);
+  });
 }
 
 async function safeListDocuments(

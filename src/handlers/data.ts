@@ -288,16 +288,25 @@ async function loadReconciledAttentionSnapshot(
 ): Promise<AttentionSnapshot> {
   const config = await ctx.config.get(companyId);
   const cacheKey = reconciliationCacheKey(store, companyId, config);
-  if (options.preferCache && !options.freshHostData) {
+  const useCache = options.preferCache && !options.freshHostData;
+  if (useCache) {
     const cachedCandidates = store.getCachedReconciledCandidates(companyId, cacheKey);
     if (cachedCandidates) return mergeStoredFrames(snapshot, companyId, cachedCandidates, reviewState);
   }
 
   let candidates: StoredFrameCandidate[];
   try {
-    candidates = await loadReconciledCandidates(ctx, store, companyId, config, {
+    const loadCandidates = () => loadReconciledCandidates(ctx, store, companyId, config, {
       freshHostData: options.freshHostData,
     });
+    candidates = useCache
+      ? await store.runSingleFlight(companyId, "reconciled-candidates", cacheKey, async () => {
+          const loadedCandidates = await loadCandidates();
+          return reconciliationCacheKey(store, companyId, config) === cacheKey
+            ? store.setCachedReconciledCandidates(companyId, cacheKey, loadedCandidates)
+            : loadedCandidates;
+        })
+      : await loadCandidates();
   } catch (error) {
     if (!isInvocationScopeDenied(error)) throw error;
     ctx.logger.warn("Aperture host reconciliation unavailable in this host callback; using current attention snapshot.", {
@@ -306,11 +315,7 @@ async function loadReconciledAttentionSnapshot(
     });
     return snapshot;
   }
-  const reconciled = mergeStoredFrames(snapshot, companyId, candidates, reviewState);
-  if (options.preferCache && !options.freshHostData) {
-    store.setCachedReconciledCandidates(companyId, cacheKey, candidates);
-  }
-  return reconciled;
+  return mergeStoredFrames(snapshot, companyId, candidates, reviewState);
 }
 
 async function loadWorkerApprovals(
