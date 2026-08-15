@@ -139,7 +139,7 @@ For `0.5.x`, the boundary works like this:
 - Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
 - Aperture Core `0.9.x` semantic and judgment hardening is consumed through this existing `ApertureCore` integration; the plugin does not run the Core `./kernel` subpath as a second runtime judgment system
 
-The plugin requires Paperclip `2026.525.0` or newer and has been validated against [`@tomismeta/aperture-core@0.9.0`](https://www.npmjs.com/package/@tomismeta/aperture-core) and [`@paperclipai/plugin-sdk@2026.707.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk).
+The plugin requires Paperclip `2026.525.0` or newer and has been validated against the packed [`@tomismeta/aperture-core@0.9.0`](https://github.com/tomismeta/aperture) artifact and [`@paperclipai/plugin-sdk@2026.707.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk). Publish Core 0.9.0 before installing this release from npm.
 
 Approval overlay transport is opt-in until the Paperclip plugin SDK exposes a first-class approval client. Set the plugin config field `paperclipApiBase` when the worker can reach the host approval API; leave it empty to run Focus without approval overlays in hosted or restricted-network environments.
 

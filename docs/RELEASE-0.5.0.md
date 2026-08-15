@@ -1,7 +1,7 @@
 # paperclip-aperture 0.5.0
 
-`0.5.0` adopts the published Aperture Core 0.9 semantic and judgment
-hardening release.
+`0.5.0` adopts the Aperture Core 0.9 semantic and judgment hardening release
+once `@tomismeta/aperture-core@0.9.0` is published.
 
 ## Highlights
 
@@ -32,4 +32,6 @@ hardening release.
 ## Validation
 
 - `pnpm release:check`
-- packed consumer validation against `@tomismeta/aperture-core@0.9.0`
+- packed consumer validation against the Core 0.9.0 artifact
+- npm publication check currently remains pending until Core 0.9.0 is on the
+  registry
