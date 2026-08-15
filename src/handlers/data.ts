@@ -287,11 +287,12 @@ async function loadReconciledAttentionSnapshot(
   options: { preferCache?: boolean; freshHostData?: boolean } = {},
 ): Promise<AttentionSnapshot> {
   const config = await ctx.config.get(companyId);
-  const cacheKey = reconciliationCacheKey(store, companyId, config);
   const useCache = options.preferCache && !options.freshHostData;
+  let cacheKey = reconciliationCacheKey(store, companyId, config);
   if (useCache) {
     const cachedCandidates = store.getCachedReconciledCandidates(companyId, cacheKey);
     if (cachedCandidates) return mergeStoredFrames(snapshot, companyId, cachedCandidates, reviewState);
+    cacheKey = reconciliationCacheKey(store, companyId, config);
   }
 
   let candidates: StoredFrameCandidate[];

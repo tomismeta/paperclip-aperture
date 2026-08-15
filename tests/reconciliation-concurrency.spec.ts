@@ -124,6 +124,71 @@ describe("reconciliation concurrency", () => {
     expect(reconciliationCacheWrites).toHaveBeenCalledTimes(1);
   });
 
+  it("coalesces concurrent display reconciliations after candidate cache expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    try {
+      const allConfigReadsStarted = deferred<void>();
+      const agentsGate = deferred<Agent[]>();
+      let configReads = 0;
+      const harness = createContext({
+        listAgents: () => agentsGate.promise,
+        getConfig: async () => {
+          configReads += 1;
+          if (configReads === 2) allConfigReadsStarted.resolve();
+          if (configReads <= 2) await allConfigReadsStarted.promise;
+          return { captureIssueLifecycle: false };
+        },
+      });
+      const store = new ApertureCompanyStore();
+      const companyId = "company-expired-candidate-cache";
+      store.hydrate(companyId, {
+        ledger: createEmptyLedger(),
+        snapshot: createEmptySnapshot(companyId),
+        review: createEmptyReviewState(companyId),
+      });
+      store.setCachedReconciledCandidates(
+        companyId,
+        JSON.stringify({
+          reconciliationRevision: 0,
+          captureIssueLifecycle: false,
+          captureRunFailures: true,
+        }),
+        [],
+      );
+      vi.setSystemTime(new Date(16_000));
+      let candidateLoadCount = 0;
+      const originalRunSingleFlight = store.runSingleFlight.bind(store);
+      vi.spyOn(store, "runSingleFlight").mockImplementation(
+        <T>(companyId: string, namespace: string, key: string, loader: () => Promise<T>) => {
+          if (namespace !== "reconciled-candidates") {
+            return originalRunSingleFlight(companyId, namespace, key, loader);
+          }
+          return originalRunSingleFlight(companyId, namespace, key, async () => {
+            candidateLoadCount += 1;
+            return loader();
+          });
+        },
+      );
+      const reconciliationCacheWrites = vi.spyOn(store, "setCachedReconciledCandidates");
+      registerDataHandlers(harness.ctx, store);
+      const display = harness.handlers.get("attention-display");
+      expect(display).toBeTypeOf("function");
+
+      const reads = [display!({ companyId }), display!({ companyId })];
+      await allConfigReadsStarted.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+      agentsGate.resolve([]);
+      await Promise.all(reads);
+
+      expect(candidateLoadCount).toBe(1);
+      expect(reconciliationCacheWrites).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("evicts a rejected host read so a later request can retry", async () => {
     const failureGate = deferred<Agent[]>();
     let fail = true;
