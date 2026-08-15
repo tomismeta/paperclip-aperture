@@ -13,10 +13,20 @@ function buildOptions(
   options: esbuild.BuildOptions,
   buildTarget: "manifest" | "ui" | "worker",
 ): esbuild.BuildOptions {
-  if (watch) return options;
+  const runtimeOptions = buildTarget === "worker"
+    ? {
+        ...options,
+        // The SDK is installed alongside the plugin and belongs to the host
+        // runtime boundary; bundling it also pulls the full shared validator
+        // graph into every worker.
+        external: [...new Set([...(options.external ?? []), "@paperclipai/plugin-sdk"])],
+      }
+    : options;
+
+  if (watch) return runtimeOptions;
 
   return {
-    ...options,
+    ...runtimeOptions,
     legalComments: "none",
     minify: buildTarget !== "ui",
     sourcemap: false,

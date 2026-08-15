@@ -54,7 +54,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "2026.707.0",
+    "@paperclipai/plugin-sdk": "2026.722.0",
     "@tomismeta/aperture-core": "0.9.0"
   },
   "devDependencies": {

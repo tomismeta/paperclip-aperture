@@ -400,7 +400,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
       throw new Error("Approval responses require a durable approval id.");
     }
 
-    const config = await ctx.config.get();
+    const config = await ctx.config.get(companyId);
     await submitApprovalDecision(ctx, approvalId, decision as "approve" | "reject" | "request-revision", config);
     store.invalidateApprovals(companyId);
 

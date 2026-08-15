@@ -10,27 +10,22 @@ function normalizeConfig(value: unknown): Record<string, unknown> {
     : {};
 }
 
-let eventConfig: Record<string, unknown> = {};
-
 const plugin = definePlugin({
   async setup(ctx) {
     const store = new ApertureCompanyStore();
-    try {
-      eventConfig = normalizeConfig(await ctx.config.get());
-    } catch (error) {
-      eventConfig = {};
-      ctx.logger.warn("Failed to load initial Focus config; event handlers will use defaults.", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
     registerDataHandlers(ctx, store);
     registerActionHandlers(ctx, store);
-    registerEventHandlers(ctx, store, () => eventConfig);
-  },
-
-  async onConfigChanged(newConfig) {
-    eventConfig = normalizeConfig(newConfig);
+    registerEventHandlers(ctx, store, async (companyId) => {
+      try {
+        return normalizeConfig(await ctx.config.get(companyId));
+      } catch (error) {
+        ctx.logger.warn("Failed to load Focus config for company; event handlers will use defaults.", {
+          companyId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {};
+      }
+    });
   },
 
   async onHealth() {

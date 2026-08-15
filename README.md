@@ -139,7 +139,9 @@ For `0.5.x`, the boundary works like this:
 - Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
 - Aperture Core `0.9.x` semantic and judgment hardening is consumed through this existing `ApertureCore` integration; the plugin does not run the Core `./kernel` subpath as a second runtime judgment system
 
-The plugin requires Paperclip `2026.525.0` or newer and has been validated against the packed [`@tomismeta/aperture-core@0.9.0`](https://github.com/tomismeta/aperture) artifact and [`@paperclipai/plugin-sdk@2026.707.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk). Publish Core 0.9.0 before installing this release from npm.
+The plugin requires Paperclip `2026.525.0` or newer and has been validated against the published [`@tomismeta/aperture-core@0.9.0`](https://www.npmjs.com/package/@tomismeta/aperture-core/v/0.9.0) artifact and [`@paperclipai/plugin-sdk@2026.722.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk/v/2026.722.0). The plugin resolves configuration per Paperclip company so settings do not bleed across company contexts.
+
+Paperclip `2026.722.0` has an upstream installer issue where the running server may report host version `0.0.0` during plugin minimum-version validation. If installation fails with that message, upgrade to a Paperclip server release containing the host-version fix; do not lower the plugin's declared minimum host version.
 
 Approval overlay transport is opt-in until the Paperclip plugin SDK exposes a first-class approval client. Set the plugin config field `paperclipApiBase` when the worker can reach the host approval API; leave it empty to run Focus without approval overlays in hosted or restricted-network environments.
 

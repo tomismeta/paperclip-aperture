@@ -97,10 +97,13 @@ describe("event handlers", () => {
     expect(store.hasPendingPersistence("company-events")).toBe(true);
   });
 
-  it("honors cached capture config without reading config during the event", async () => {
+  it("resolves capture config for the event company", async () => {
     const harness = createEventHarness({ captureIssueLifecycle: false });
     const store = new ApertureCompanyStore();
-    registerEventHandlers(harness.ctx, store, () => harness.config);
+    const getConfig = vi.fn((companyId: string) => (
+      companyId === "company-disabled-events" ? harness.config : {}
+    ));
+    registerEventHandlers(harness.ctx, store, getConfig);
 
     const callback = harness.callbacks.get("issue.updated");
     await callback?.({
@@ -116,6 +119,7 @@ describe("event handlers", () => {
       },
     } as PluginEvent);
 
+    expect(getConfig).toHaveBeenCalledWith("company-disabled-events");
     expect(harness.configGet).not.toHaveBeenCalled();
     expect(store.getLedger("company-disabled-events")).toHaveLength(0);
   });

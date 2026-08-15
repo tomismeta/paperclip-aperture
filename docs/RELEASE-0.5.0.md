@@ -1,11 +1,14 @@
 # paperclip-aperture 0.5.0
 
-`0.5.0` adopts the Aperture Core 0.9 semantic and judgment hardening release
-once `@tomismeta/aperture-core@0.9.0` is published.
+`0.5.0` adopts the published Aperture Core 0.9 semantic and judgment hardening
+release.
 
 ## Highlights
 
 - upgrades `@tomismeta/aperture-core` from `0.8.0` to `0.9.0`
+- upgrades `@paperclipai/plugin-sdk` from `2026.707.0` to `2026.722.0`
+- resolves Paperclip plugin configuration by company ID for event, data, and
+  action paths instead of keeping one worker-global configuration snapshot
 - keeps Paperclip on the existing stateful `ApertureCore` integration
 - preserves one judgment path and intentionally leaves the Core `./kernel`
   subpath out of the runtime path
@@ -33,5 +36,15 @@ once `@tomismeta/aperture-core@0.9.0` is published.
 
 - `pnpm release:check`
 - packed consumer validation against the Core 0.9.0 artifact
-- npm publication check currently remains pending until Core 0.9.0 is on the
-  registry
+- npm publication check against the published Core 0.9.0 registry artifact
+- exact npm tarball installed in a clean consumer with Core 0.9.0 and SDK
+  2026.722.0
+- exact packed plugin activated in Paperclip 2026.722.0 and rendered Focus at
+  desktop and mobile viewport sizes
+
+## Upstream Note
+
+Paperclip `2026.722.0` may report its running host version as `0.0.0` during
+plugin minimum-version validation. That installer defect is in Paperclip's
+server and is not worked around by lowering this plugin's declared minimum
+host version.

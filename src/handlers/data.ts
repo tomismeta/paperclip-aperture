@@ -286,7 +286,7 @@ async function loadReconciledAttentionSnapshot(
   reviewState: AttentionReviewState,
   options: { preferCache?: boolean; freshHostData?: boolean } = {},
 ): Promise<AttentionSnapshot> {
-  const config = await ctx.config.get();
+  const config = await ctx.config.get(companyId);
   const cacheKey = reconciliationCacheKey(store, companyId, config);
   if (options.preferCache && !options.freshHostData) {
     const cachedCandidates = store.getCachedReconciledCandidates(companyId, cacheKey);
@@ -321,7 +321,7 @@ async function loadWorkerApprovals(
   const cached = store.getApprovals(companyId);
   if (!store.approvalsDirty(companyId) && cached) return cached;
 
-  const config = await ctx.config.get();
+  const config = await ctx.config.get(companyId);
   try {
     const approvals = await listPendingApprovals(ctx, companyId, config);
     return store.setApprovals(companyId, approvals);

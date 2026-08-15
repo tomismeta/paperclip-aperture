@@ -40,7 +40,7 @@ const HOST_REFRESH_EVENT_TYPES = new Set([
   "issue.relations.updated",
 ]);
 
-type EventConfigProvider = () => Record<string, unknown>;
+type EventConfigProvider = (companyId: string) => Record<string, unknown> | Promise<Record<string, unknown>>;
 
 function shouldCaptureEvent(
   config: Record<string, unknown>,
@@ -188,7 +188,8 @@ export function registerEventHandlers(
 ): void {
   for (const eventName of SUBSCRIBED_EVENTS) {
     ctx.events.on(eventName as never, async (event) => {
-      await handleEvent(ctx, store, event as PluginEvent, getConfig());
+      const pluginEvent = event as PluginEvent;
+      await handleEvent(ctx, store, pluginEvent, await getConfig(pluginEvent.companyId));
     });
   }
 }
