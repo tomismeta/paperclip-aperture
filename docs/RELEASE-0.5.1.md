@@ -10,6 +10,10 @@
 - prevents invalidated or superseded host loads from restoring stale cache entries
 - refreshes the reconciled-candidate flight key after candidate-cache expiry
 
+## Contributor
+
+- Thanks to [@lusoris](https://github.com/lusoris) for raising [PR #6](https://github.com/tomismeta/paperclip-aperture/pull/6), which introduced the concurrent reconciliation read coalescing work.
+
 ## Validation
 
 - `pnpm release:check`
