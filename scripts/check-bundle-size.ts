@@ -10,7 +10,7 @@ type BundleBudget = {
 
 const BUNDLE_BUDGETS: BundleBudget[] = [
   { label: "UI bundle", path: "dist/ui/index.js", maxBytes: 100_000 },
-  { label: "Worker bundle", path: "dist/worker.js", maxBytes: 700_000 },
+  { label: "Worker bundle", path: "dist/worker.js", maxBytes: 730_000 },
   { label: "Manifest bundle", path: "dist/manifest.js", maxBytes: 10_000 },
 ];
 

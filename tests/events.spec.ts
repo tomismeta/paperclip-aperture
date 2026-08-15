@@ -146,4 +146,14 @@ describe("event handlers", () => {
     expect(harness.streamOpen).not.toHaveBeenCalled();
     expect(harness.streamEmit).not.toHaveBeenCalled();
   });
+
+  it("subscribes to native Paperclip document and relation refresh events", () => {
+    const harness = createEventHarness();
+    registerEventHandlers(harness.ctx, new ApertureCompanyStore(), () => harness.config);
+
+    expect(harness.callbacks.get("issue.document.created")).toBeTypeOf("function");
+    expect(harness.callbacks.get("issue.document.updated")).toBeTypeOf("function");
+    expect(harness.callbacks.get("issue.document.deleted")).toBeTypeOf("function");
+    expect(harness.callbacks.get("issue.relations.updated")).toBeTypeOf("function");
+  });
 });

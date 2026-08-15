@@ -550,6 +550,75 @@ describe("paperclip aperture", () => {
     expect(snapshot.now?.responseSpec?.kind).toBe("acknowledge");
   });
 
+  it("preserves reliable run diagnostics as Core source evidence", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "agent.run.failed",
+      {
+        title: "Command failed",
+        stderr: "pnpm test exited with code 1",
+        exitCode: 1,
+      },
+      { companyId: "company-evidence", entityId: "run-evidence", entityType: "run" },
+    );
+
+    await harness.emit(
+      "agent.run.failed",
+      {
+        title: "Partial command failure",
+        stderr: "only the first part of the test output was captured",
+        exitCode: 1,
+        logsTruncated: true,
+      },
+      { companyId: "company-evidence", entityId: "run-truncated", entityType: "run" },
+    );
+
+    const exported = await harness.getData<AttentionExport>("attention-export", { companyId: "company-evidence" });
+    const entry = exported.eventEntries.find((candidate) => candidate.source.entityId === "run-evidence");
+    const truncatedEntry = exported.eventEntries.find((candidate) => candidate.source.entityId === "run-truncated");
+
+    expect(entry?.sourceEvent?.type).toBe("task.updated");
+    expect(entry?.sourceEvent && "evidence" in entry.sourceEvent ? entry.sourceEvent.evidence : undefined).toEqual({
+      kind: "diagnostic",
+      diagnostic: "runtime",
+      subject: "command",
+      channel: "command",
+      complete: true,
+    });
+    expect(
+      entry?.apertureEvent && "summary" in entry.apertureEvent
+        ? entry.apertureEvent.summary
+        : undefined,
+    ).toContain("pnpm test exited with code 1");
+    expect(truncatedEntry?.sourceEvent && "evidence" in truncatedEntry.sourceEvent ? truncatedEntry.sourceEvent.evidence : undefined).toBeUndefined();
+    expect(truncatedEntry?.sourceEvent?.semanticHints?.confidence).toBe("low");
+    expect(truncatedEntry?.sourceEvent?.semanticHints?.factors).toContain("source evidence truncated");
+  });
+
+  it("keeps document-scoped comments out of the top-level follow-up class", async () => {
+    const harness = createTestHarness({ manifest });
+    await plugin.definition.setup(harness.ctx);
+
+    await harness.emit(
+      "issue.comment.created",
+      {
+        issueTitle: "Review memo",
+        bodySnippet: "Inline review note",
+        documentId: "document-1",
+        status: "blocked",
+      },
+      { companyId: "company-document-comment", entityId: "issue-document-comment", entityType: "issue" },
+    );
+
+    const exported = await harness.getData<AttentionExport>("attention-export", { companyId: "company-document-comment" });
+    const entry = exported.eventEntries[0];
+    expect(entry?.sourceEvent?.type).toBe("task.updated");
+    expect(entry?.sourceEvent && "activityClass" in entry.sourceEvent ? entry.sourceEvent.activityClass : undefined).toBe("status_update");
+    expect(entry?.sourceEvent?.metadata?.paperclipCommentScope).toBe("document");
+  });
+
   it("clears issue-linked run failures when the issue moves out of an actionable state", async () => {
     const harness = createTestHarness({ manifest });
     await plugin.definition.setup(harness.ctx);

@@ -1,6 +1,9 @@
 import type { PluginEvent } from "@paperclipai/plugin-sdk";
-import type { ApertureEvent, SourceEvent, SourceRef, TaskStatus } from "@tomismeta/aperture-core";
-import { interpretSourceEvent } from "@tomismeta/aperture-core/semantic";
+import type { ApertureEvent, SourceEvidence, SourceEvent, SourceRef, TaskStatus } from "@tomismeta/aperture-core";
+import {
+  interpretSourceEvent,
+  semanticHintsForTruncatedSourceEvidence,
+} from "@tomismeta/aperture-core/semantic";
 import { createInteractionId, createTaskId } from "./task-ref.js";
 import {
   approvalBlockingSummary,
@@ -55,6 +58,148 @@ function readStringArray(payload: unknown, key: string): string[] | undefined {
 function readPayloadString(payload: unknown, key: string): string | undefined {
   if (!payload || typeof payload !== "object") return undefined;
   return readString((payload as Record<string, unknown>)[key]);
+}
+
+function readPayloadBoolean(payload: unknown, key: string): boolean | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readPayloadNumber(payload: unknown, key: string): number | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readPayloadRecord(payload: unknown, key: string): Record<string, unknown> | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const value = (payload as Record<string, unknown>)[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function readSourceEvidence(payload: unknown): SourceEvidence | undefined {
+  const evidence = readPayloadRecord(payload, "evidence");
+  if (!evidence || typeof evidence.kind !== "string") return undefined;
+
+  const subjects = ["command", "document", "search", "source", "tool"];
+  const channels = ["command", "read", "search", "structured", "transcript"];
+
+  if ((evidence.kind === "outcome" || evidence.kind === "diagnostic")
+    && (evidence.kind === "outcome"
+      ? evidence.outcome === "success" || evidence.outcome === "failure"
+      : evidence.diagnostic === "runtime" || evidence.diagnostic === "expected")
+    && subjects.includes(String(evidence.subject))
+    && channels.includes(String(evidence.channel))
+    && evidence.complete === true) {
+    return evidence as SourceEvidence;
+  }
+
+  if (evidence.kind === "diagnostic"
+    && evidence.diagnostic === "source_limit"
+    && evidence.channel === "read") {
+    const window = evidence.window;
+    if (window && typeof window === "object") {
+      const record = window as Record<string, unknown>;
+      const validNumbers = ["offset", "length", "total"].every((key) => {
+        const value = record[key];
+        return typeof value === "number" && Number.isInteger(value) && value >= 0;
+      });
+      if ((record.unit === "bytes" || record.unit === "lines") && validNumbers) {
+        return evidence as SourceEvidence;
+      }
+    }
+  }
+
+  if (evidence.kind === "payload"
+    && ["document", "search", "source", "tool"].includes(String(evidence.subject))
+    && channels.includes(String(evidence.channel))
+    && evidence.complete === true) {
+    return evidence as SourceEvidence;
+  }
+
+  if (evidence.kind === "authorization"
+    && evidence.state === "required"
+    && evidence.execution === "not_started"
+    && evidence.result === "absent") {
+    return evidence as SourceEvidence;
+  }
+
+  return undefined;
+}
+
+function hasTruncationFact(payload: unknown): boolean {
+  return readPayloadBoolean(payload, "logsTruncated") === true
+    || readPayloadBoolean(payload, "outputTruncated") === true
+    || readPayloadBoolean(payload, "sourceTruncated") === true;
+}
+
+function sourceEvidenceForRunFailure(payload: unknown): SourceEvidence | undefined {
+  const typedEvidence = readSourceEvidence(payload);
+  if (typedEvidence) {
+    // A complete diagnostic and an explicit clipping flag contradict each
+    // other. Let Core's truncation hint path handle the latter instead.
+    if (hasTruncationFact(payload)
+      && !(typedEvidence.kind === "diagnostic" && typedEvidence.diagnostic === "source_limit")) {
+      return undefined;
+    }
+    return typedEvidence;
+  }
+
+  if (hasTruncationFact(payload)) return undefined;
+
+  const stderr = readPayloadString(payload, "stderr");
+  const exitCode = readPayloadNumber(payload, "exitCode");
+  const command = readPayloadString(payload, "command");
+  if (!stderr || (command === undefined && exitCode === undefined)) return undefined;
+
+  return {
+    kind: "diagnostic",
+    diagnostic: "runtime",
+    subject: "command",
+    channel: "command",
+    complete: true,
+  };
+}
+
+function runFailureSummary(payload: unknown): string {
+  const summary = readPayloadString(payload, "summary")
+    ?? readPayloadString(payload, "stderr")
+    ?? readPayloadString(payload, "failureReason")
+    ?? runFailedSummary();
+
+  return hasTruncationFact(payload)
+    ? `${summary} Paperclip reports that the diagnostic output was truncated.`
+    : summary;
+}
+
+function isDocumentScopedComment(payload: unknown): boolean {
+  return readPayloadString(payload, "documentId") !== undefined
+    || readPayloadString(payload, "documentKey") !== undefined
+    || readPayloadString(payload, "scope")?.toLowerCase() === "document"
+    || readPayloadBoolean(payload, "documentScoped") === true;
+}
+
+function sourceMetadata(event: MappablePluginEvent): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    paperclipEventType: event.eventType,
+    ...(event.actorId ? { actorId: event.actorId } : {}),
+    ...(event.actorType ? { actorType: event.actorType } : {}),
+  };
+
+  if ((event.eventType === "issue.comment.created" || event.eventType === "issue.comment_added")
+    && isDocumentScopedComment(event.payload)) {
+    metadata.paperclipCommentScope = "document";
+  }
+
+  const evidence = sourceEvidenceForRunFailure(event.payload);
+  if (event.eventType === "agent.run.failed" && evidence) {
+    metadata.sourceEvidenceKind = evidence.kind;
+  }
+
+  return metadata;
 }
 
 function humanizeApprovalType(value: string | undefined): string | undefined {
@@ -233,11 +378,18 @@ function pendingApprovalSemanticHints(): SourceEvent["semanticHints"] {
   };
 }
 
-function runFailureSemanticHints(): SourceEvent["semanticHints"] {
+function runFailureSemanticHints(payload: unknown): SourceEvent["semanticHints"] {
+  const truncated = hasTruncationFact(payload);
+
   return {
     intentFrame: "failure",
     whyNow: runFailedWhyNow(),
-    factors: ["run failed", "operator review"],
+    factors: [
+      "run failed",
+      "operator review",
+      ...(truncated ? ["source evidence truncated"] : []),
+    ],
+    ...(truncated ? semanticHintsForTruncatedSourceEvidence({ status: "failed" }) : {}),
   };
 }
 
@@ -418,6 +570,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
 
     case "issue.comment.created":
     case "issue.comment_added": {
+      const documentScoped = isDocumentScopedComment(event.payload);
       const title = issueDisplayTitle(event, "Issue comment");
       const summary =
         readPayloadString(event.payload, "bodySnippet")
@@ -431,7 +584,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         source,
         title,
         summary,
-        activityClass: "follow_up",
+        activityClass: documentScoped ? "status_update" : "follow_up",
         status,
         progress: undefined,
         semantic: interpretEventSemantic({
@@ -442,7 +595,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           source,
           title,
           summary,
-          activityClass: "follow_up",
+          activityClass: documentScoped ? "status_update" : "follow_up",
           status,
           semanticHints: issueSemanticHints(event),
         }),
@@ -464,7 +617,8 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
       {
         const failureTaskId = relatedIssueTaskId(event.payload) ?? taskId;
         const title = readPayloadString(event.payload, "title") ?? "Agent run failed";
-        const summary = readPayloadString(event.payload, "summary") ?? runFailedSummary();
+        const summary = runFailureSummary(event.payload);
+        const evidence = sourceEvidenceForRunFailure(event.payload);
         return {
         id: `${event.eventId}:run-failed`,
         type: "task.updated",
@@ -476,6 +630,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         status: "failed",
         title,
         summary,
+        ...(evidence ? { evidence } : {}),
         semantic: interpretEventSemantic({
           id: `${event.eventId}:run-failed`,
           type: "task.updated",
@@ -487,7 +642,8 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           title,
           summary,
           status: "failed",
-          semanticHints: runFailureSemanticHints(),
+          ...(evidence ? { evidence } : {}),
+          semanticHints: runFailureSemanticHints(event.payload),
         }),
       };
       }
@@ -613,12 +769,17 @@ export function mapPluginEventToSourceEvent(event: MappablePluginEvent): SourceE
   const mapped = mapPluginEventToAperture(event);
   if (!mapped) return null;
 
+  const semanticHints = event.eventType === "agent.run.failed"
+    ? runFailureSemanticHints(event.payload)
+    : semanticHintsFromMappedEvent(mapped);
+
   const base = {
     id: mapped.id,
     taskId: mapped.taskId,
     timestamp: mapped.timestamp,
     source: mapped.source,
-    semanticHints: semanticHintsFromMappedEvent(mapped),
+    metadata: sourceMetadata(event),
+    semanticHints,
   };
 
   switch (mapped.type) {
@@ -638,6 +799,7 @@ export function mapPluginEventToSourceEvent(event: MappablePluginEvent): SourceE
         ...(mapped.toolFamily ? { toolFamily: mapped.toolFamily } : {}),
         ...(mapped.activityClass ? { activityClass: mapped.activityClass } : {}),
         status: mapped.status,
+        ...(mapped.evidence ? { evidence: mapped.evidence } : {}),
         ...(typeof mapped.progress === "number" ? { progress: mapped.progress } : {}),
         ...(mapped.context ? { context: mapped.context } : {}),
       };

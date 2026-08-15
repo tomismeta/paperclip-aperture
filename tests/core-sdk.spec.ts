@@ -5,7 +5,7 @@ import {
 } from "@tomismeta/aperture-core/evaluator";
 import { semanticHintsForTruncatedSourceEvidence } from "@tomismeta/aperture-core/semantic";
 
-describe("aperture-core 0.8 diagnostics surfaces", () => {
+describe("aperture-core 0.9 diagnostics surfaces", () => {
   it("evaluates a high-consequence blocking claim through the stateless evaluator", () => {
     const record = evaluateAttention({
       claim: {
@@ -37,7 +37,7 @@ describe("aperture-core 0.8 diagnostics surfaces", () => {
     const hints = semanticHintsForTruncatedSourceEvidence({ status: "failed" });
 
     expect(hints.confidence).toBe("low");
-    expect(hints.consequence).toBe("high");
+    expect("consequence" in hints).toBe(false);
     expect(hints.factors).toContain("source evidence truncated");
   });
 });

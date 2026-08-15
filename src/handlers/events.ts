@@ -15,6 +15,10 @@ const SUBSCRIBED_EVENTS: readonly string[] = [
   "issue.updated",
   "issue.comment.created",
   "issue.comment_added",
+  "issue.document.created",
+  "issue.document.updated",
+  "issue.document.deleted",
+  "issue.relations.updated",
   "agent.run.started",
   "agent.run.failed",
   "agent.run.finished",
@@ -27,6 +31,13 @@ const ATTENTION_ACTIVITY_ACTIONS = new Set([
   "issue.document_created",
   "issue.document_updated",
   "issue.document_deleted",
+]);
+
+const HOST_REFRESH_EVENT_TYPES = new Set([
+  "issue.document.created",
+  "issue.document.updated",
+  "issue.document.deleted",
+  "issue.relations.updated",
 ]);
 
 type EventConfigProvider = () => Record<string, unknown>;
@@ -50,6 +61,36 @@ function shouldCaptureEvent(
   }
 
   return true;
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {};
+}
+
+function issueIdForHostRefresh(event: PluginEvent): string | undefined {
+  if (event.entityType === "issue" && event.entityId) return event.entityId;
+  const issueId = payloadRecord(event.payload).issueId;
+  return typeof issueId === "string" && issueId.trim().length > 0 ? issueId : undefined;
+}
+
+function invalidateIssueHostState(ctx: PluginContext, store: ApertureCompanyStore, event: PluginEvent): void {
+  const issueId = issueIdForHostRefresh(event);
+  store.invalidateHostCache(event.companyId, {
+    keys: issueId ? [
+      `issue:${issueId}:detail`,
+      `issue:${issueId}:comments`,
+      `issue:${issueId}:documents`,
+      `issue:${issueId}:relations`,
+    ] : [],
+    prefixes: ["issues:blocked", "issues:in_review"],
+  });
+  ctx.logger.info("Triggered Focus refresh from Paperclip host event", {
+    companyId: event.companyId,
+    eventType: event.eventType,
+    issueId,
+  });
 }
 
 async function handleEvent(
@@ -85,6 +126,11 @@ async function handleEvent(
         entityType,
       });
     }
+    return;
+  }
+
+  if (HOST_REFRESH_EVENT_TYPES.has(event.eventType)) {
+    invalidateIssueHostState(ctx, store, event);
     return;
   }
 
