@@ -1,6 +1,6 @@
 {
   "name": "@tomismeta/paperclip-aperture",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "private": false,
   "description": "The live attention layer for Paperclip, combining Aperture Core continuity with Paperclip-native operator policy.",
