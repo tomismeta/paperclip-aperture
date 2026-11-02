@@ -1,6 +1,7 @@
 import { usePluginAction } from "@paperclipai/plugin-sdk/ui";
 import { useEffect, useRef, useState } from "react";
 import type { AttentionSnapshot, StoredAttentionFrame } from "../aperture/types.js";
+import { readFocusMetadata } from "../aperture/contracts.js";
 import {
   approvalIdForFrame,
   compactTitle,
@@ -13,8 +14,6 @@ import {
   approvalDecisionFailureMessage,
   approvalDecisionSuccessMessage,
   approvalFrameUnsupportedMessage,
-  approvalRevisionFailureMessage,
-  approvalRevisionSuccessMessage,
   commentFailureMessage,
   commentSuccessMessage,
   issueFrameUnsupportedMessage,
@@ -33,6 +32,7 @@ export function useFocusPageActions(input: {
   const engageFocus = usePluginAction("engage-focus");
   const markAttentionViewed = usePluginAction("mark-attention-viewed");
   const recordApprovalResponse = usePluginAction("record-approval-response");
+  const respondToInteraction = usePluginAction("respond-to-interaction");
   const setFocusPresence = usePluginAction("set-focus-presence");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [statusOverride, setStatusOverride] = useState<string | null>(null);
@@ -40,6 +40,12 @@ export function useFocusPageActions(input: {
   const lastViewedInteractionRef = useRef<string | null>(null);
   const markAttentionViewedRef = useRef(markAttentionViewed);
   const setFocusPresenceRef = useRef(setFocusPresence);
+  const companyRef = useRef(input.companyId);
+  const companyEpochRef = useRef(0);
+  if (companyRef.current !== input.companyId) {
+    companyRef.current = input.companyId;
+    companyEpochRef.current += 1;
+  }
 
   markAttentionViewedRef.current = markAttentionViewed;
   setFocusPresenceRef.current = setFocusPresence;
@@ -58,11 +64,13 @@ export function useFocusPageActions(input: {
 
   useEffect(() => {
     return () => {
+      companyEpochRef.current += 1;
       if (focusReleaseTimerRef.current) {
         window.clearTimeout(focusReleaseTimerRef.current);
+        focusReleaseTimerRef.current = null;
       }
     };
-  }, []);
+  }, [input.companyId]);
 
   useEffect(() => {
     const companyId = input.companyId;
@@ -107,6 +115,7 @@ export function useFocusPageActions(input: {
     const companyId = input.companyId;
     if (!companyId) return;
     if (input.displaySnapshot?.now?.interactionId !== frame.interactionId) return;
+    const companyEpoch = companyEpochRef.current;
 
     const durationMs = reason === "comment_compose" ? FOCUS_HOLD_COMPOSE_MS : FOCUS_HOLD_CONTEXT_MS;
 
@@ -118,6 +127,7 @@ export function useFocusPageActions(input: {
         reason,
         durationMs,
       });
+      if (companyEpochRef.current !== companyEpoch) return;
       input.refresh();
       if (focusReleaseTimerRef.current) {
         window.clearTimeout(focusReleaseTimerRef.current);
@@ -156,8 +166,12 @@ export function useFocusPageActions(input: {
 
     setPendingId(frame.id);
     try {
-      await commentOnIssue({ companyId, taskId: frame.taskId, issueId, body });
-      setStatusOverride(commentSuccessMessage(compactTitle(frame)));
+      const result = await commentOnIssue({ companyId, taskId: frame.taskId, issueId, body });
+      setStatusOverride(
+        result && typeof result === "object" && "syncWarning" in result && typeof result.syncWarning === "string"
+          ? result.syncWarning
+          : commentSuccessMessage(compactTitle(frame)),
+      );
       input.refresh();
     } catch (actionError) {
       setStatusOverride(commentFailureMessage(actionError));
@@ -176,14 +190,26 @@ export function useFocusPageActions(input: {
 
     setPendingId(frame.id);
     try {
-      await recordApprovalResponse({
+      const result = await recordApprovalResponse({
         companyId,
         taskId: frame.taskId,
         interactionId: frame.interactionId,
         decision,
       });
+      if (result && typeof result === "object" && "applied" in result && result.applied === false) {
+        await markAttentionViewed({
+          companyId,
+          taskId: frame.taskId,
+          interactionId: frame.interactionId,
+          surface: "focus",
+        });
+      }
 
-      setStatusOverride(approvalDecisionSuccessMessage(compactTitle(frame), decision));
+      setStatusOverride(
+        result && typeof result === "object" && "applied" in result && result.applied === false
+          ? "This approval was already resolved in Paperclip."
+          : approvalDecisionSuccessMessage(compactTitle(frame), decision),
+      );
       input.refresh();
     } catch (actionError) {
       setStatusOverride(approvalDecisionFailureMessage(actionError));
@@ -192,27 +218,33 @@ export function useFocusPageActions(input: {
     }
   }
 
-  async function requestApprovalRevision(frame: StoredAttentionFrame) {
+  async function submitInteractionDecision(
+    frame: StoredAttentionFrame,
+    decision: "accept" | "reject",
+    reason?: string,
+  ): Promise<boolean> {
     const companyId = input.companyId;
-    const approvalId = approvalIdForFrame(frame);
-    if (!companyId || !approvalId) {
-      setStatusOverride(approvalFrameUnsupportedMessage());
-      return;
+    const metadata = readFocusMetadata(frame);
+    if (!companyId || !metadata.issueId || !metadata.paperclipInteractionId) return false;
+    if (decision === "reject" && metadata.interactionDecision?.rejectRequiresReason && !reason?.trim()) {
+      setStatusOverride("A reason is required to decline this decision.");
+      return false;
     }
-
     setPendingId(frame.id);
     try {
-      await recordApprovalResponse({
-        companyId,
-        taskId: frame.taskId,
-        interactionId: frame.interactionId,
-        decision: "request-revision",
+      const result = await respondToInteraction({
+        companyId, taskId: frame.taskId, interactionId: frame.interactionId,
+        issueId: metadata.issueId, decision, ...(reason?.trim() ? { reason: reason.trim() } : {}),
       });
-
-      setStatusOverride(approvalRevisionSuccessMessage(compactTitle(frame)));
+      const converged = result && typeof result === "object" && "applied" in result && result.applied === false;
+      setStatusOverride(converged
+        ? "This decision was already resolved in Paperclip."
+        : decision === "accept" ? "Decision confirmed in Paperclip." : "Decision declined in Paperclip.");
       input.refresh();
-    } catch (actionError) {
-      setStatusOverride(approvalRevisionFailureMessage(actionError));
+      return true;
+    } catch (error) {
+      setStatusOverride(error instanceof Error ? error.message : "Failed to respond to this decision.");
+      return false;
     } finally {
       setPendingId(null);
     }
@@ -225,6 +257,6 @@ export function useFocusPageActions(input: {
     acknowledgeFrame,
     commentOnIssueFrame,
     submitApprovalDecision,
-    requestApprovalRevision,
+    submitInteractionDecision,
   };
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useHostContext } from "@paperclipai/plugin-sdk/ui";
 import type { StoredAttentionFrame } from "../aperture/types.js";
 import { ActionButton } from "./chrome.js";
 import { compactTitle, isIssueFrame } from "./frame-helpers.js";
@@ -14,17 +15,24 @@ export function IssueCommentComposer(props: {
   rows?: number;
   panelClassName?: string;
 }) {
+  const { companyId } = useHostContext();
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const lifecycleRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const issueFrame = isIssueFrame(props.frame);
 
-  const isPending = props.pendingId === props.frame.id;
+  const isPending = submitting || props.pendingId === props.frame.id;
 
   useEffect(() => {
+    lifecycleRef.current += 1;
+    submittingRef.current = false;
+    setSubmitting(false);
     setOpen(false);
     setBody("");
-  }, [props.frame.id]);
+  }, [companyId, props.frame.taskId, props.frame.interactionId]);
 
   useEffect(() => {
     if (open && issueFrame) textareaRef.current?.focus();
@@ -34,10 +42,21 @@ export function IssueCommentComposer(props: {
 
   async function submit() {
     const nextBody = body.trim();
-    if (!nextBody) return;
-    await props.onComment(props.frame, nextBody);
-    setBody("");
-    setOpen(false);
+    if (!nextBody || submittingRef.current || isPending) return;
+    const lifecycle = lifecycleRef.current;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      await props.onComment(props.frame, nextBody);
+      if (lifecycleRef.current !== lifecycle) return;
+      setBody("");
+      setOpen(false);
+    } finally {
+      if (lifecycleRef.current === lifecycle) {
+        submittingRef.current = false;
+        setSubmitting(false);
+      }
+    }
   }
 
   if (!open) {
@@ -84,6 +103,7 @@ export function IssueCommentComposer(props: {
       <textarea
         ref={textareaRef}
         value={body}
+        disabled={isPending}
         onChange={(event) => setBody(event.target.value)}
         onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {

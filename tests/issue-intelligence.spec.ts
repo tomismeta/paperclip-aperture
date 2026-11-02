@@ -22,6 +22,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     description: "Need clarification from the operator before resuming the rollout.",
     status: "blocked",
     workMode: "standard",
+    reviewPolicy: null,
     priority: "high",
     assigneeAgentId: null,
     assigneeUserId: null,
@@ -76,6 +77,38 @@ function createIssueDocumentSummary(
 }
 
 describe("issue-intelligence", () => {
+  it.each([
+    "FYI @Atlas: the deployment notes are attached.",
+    "FYI @ceo: the deployment notes are attached.",
+    "Atlas supplied the deployment notes.",
+    "Waiting on deployment; FYI @Atlas.",
+    "Need clarification\nfrom @Atlas.",
+    `Need ${"x".repeat(61)} from @Atlas.`,
+    "Needed from @ops-lead; Atlas can observe.",
+  ])("does not assign casual mentions or names to an agent: %s", (text) => {
+    const analysis = analyzeIssueIntents(createIssue({ description: text }), null, {
+      agentNames: ["Atlas", "CEO"],
+    });
+    expect(analysis.owner).toBe(text.startsWith("Needed from @ops-lead") ? "Ops-lead" : null);
+    expect(analysis.ownerKind).toBe(text.startsWith("Needed from @ops-lead") ? "human" : null);
+  });
+
+  it.each([
+    ["Needed from Founding Engineer: confirm the handoff.", "Founding Engineer", "agent"],
+    ["Needed from @Atlas: confirm the handoff.", "Atlas", "agent"],
+    ["Waiting on @ops-lead for the budget.", "Ops-lead", "human"],
+    ["Need clarification from @Atlas before rollout.", "Atlas", "agent"],
+    ["Needed from Jane Doe: confirm the handoff.", "Jane Doe", "human"],
+    ["Board should confirm the handoff.", "Board", "human"],
+    ["Requires human review.", "Human", "human"],
+    ["Operator intervention is required.", "Operator", "human"],
+    ["The CEO agent should review.", "CEO", "human"],
+  ])("preserves explicit ownership: %s", (text, owner, ownerKind) => {
+    expect(analyzeIssueIntents(createIssue({ description: text }), null, {
+      agentNames: ["Atlas", "Founding Engineer"],
+    })).toMatchObject({ owner, ownerKind });
+  });
+
   it("marks clarification requests as medium-confidence repeats", () => {
     const analysis = analyzeIssueTextSemantics({
       text: "Need clarification from the board before the rollout can continue.",

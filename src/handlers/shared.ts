@@ -1,13 +1,17 @@
-import type { PluginContext } from "@paperclipai/plugin-sdk";
+import type { PluginContext, PluginPerformActionContext } from "@paperclipai/plugin-sdk";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import {
   createPersistedAttentionState,
+  isAttentionLedger,
+  normalizeSplitAttentionState,
   normalizePersistedAttentionState,
   type PersistedAttentionState,
 } from "../aperture/persisted-state.js";
 import {
   createEmptyReviewState,
   createEmptySnapshot,
+  normalizeAttentionSnapshot,
+  type AttentionLedger,
   type AttentionReviewState,
   type AttentionSnapshot,
 } from "../aperture/types.js";
@@ -40,6 +44,30 @@ export function requireStringParam(params: Record<string, unknown>, key: string)
 
 export function requireCompanyId(params: Record<string, unknown>): string {
   return requireStringParam(params, "companyId");
+}
+
+export function requireHumanActionScope(
+  params: Record<string, unknown>,
+  context: PluginPerformActionContext,
+): { companyId: string; actorUserId: string } {
+  const companyId = context.companyId;
+  if (typeof companyId !== "string" || companyId.trim().length === 0) {
+    throw new Error("Host-authorized company scope is required.");
+  }
+  if (
+    (params.companyId !== undefined && params.companyId !== companyId)
+    || (context.actor.companyId != null && context.actor.companyId !== companyId)
+  ) {
+    throw new Error("Company scope does not match the authenticated action.");
+  }
+  if (
+    context.actor.type !== "user"
+    || typeof context.actor.userId !== "string"
+    || context.actor.userId.trim().length === 0
+  ) {
+    throw new Error("A signed-in human operator is required for this action.");
+  }
+  return { companyId, actorUserId: context.actor.userId };
 }
 
 export function isInvocationScopeDenied(error: unknown): boolean {
@@ -139,36 +167,69 @@ export function emitAttentionUpdate(
   ctx.streams.emit(ATTENTION_UPDATES_STREAM, event);
 }
 
-export async function flushPendingAttentionState(
-  ctx: PluginContext,
-  store: ApertureCompanyStore,
-  companyId: string,
-): Promise<boolean> {
+type HydratedAttentionState = {
+  baseLedger: AttentionLedger;
+  snapshot: AttentionSnapshot;
+  reviewState: AttentionReviewState;
+};
+
+function inMemoryAttentionState(store: ApertureCompanyStore, companyId: string): HydratedAttentionState {
+  return {
+    baseLedger: store.getLedger(companyId),
+    snapshot: store.getSnapshot(companyId) ?? createEmptySnapshot(companyId),
+    reviewState: store.getReview(companyId) ?? createEmptyReviewState(companyId),
+  };
+}
+
+// Called only inside the company queue. Event callbacks may keep appending while reads await.
+async function hydrateAttentionState(ctx: PluginContext, store: ApertureCompanyStore, companyId: string): Promise<void> {
+  if (store.hasHydratedState(companyId)) return;
+  let state = await loadPersistedAttentionState(ctx, companyId);
+  if (!state) {
+    const ledger = await ctx.state.get({ scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_LEDGER_STATE_KEY });
+    const snapshot = await ctx.state.get({ scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_SNAPSHOT_STATE_KEY });
+    const review = await ctx.state.get({ scopeKind: "company", scopeId: companyId, stateKey: ATTENTION_REVIEW_STATE_KEY });
+    if (!isAttentionLedger(ledger) && normalizeAttentionSnapshot(companyId, snapshot)) {
+      ctx.logger.warn("Legacy snapshot found without replay ledger; rebuilt state may be partial until new events arrive.", { companyId });
+    }
+    state = normalizeSplitAttentionState(companyId, { ledger, snapshot, review });
+  }
+  store.hydrate(companyId, { ledger: state.ledger, snapshot: state.snapshot, review: state.review });
+  if (state.needsMigrationPersistence) store.markPersistencePending(companyId);
+}
+
+async function flushPendingAttentionState(ctx: PluginContext, store: ApertureCompanyStore, companyId: string): Promise<boolean> {
+  if (!store.hasPendingPersistence(companyId)) return false;
+  const state = store.getPersistableState(companyId);
+  if (!state) return false;
+  try {
+    await persistAttentionState(ctx, companyId, state);
+    store.markPersistenceHealthy(companyId, state.ledger.length);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isInvocationScopeDenied(error)) {
+      ctx.logger.warn("Aperture pending state could not be persisted in this host callback; will retry from the next scoped invocation.", { companyId, error: message });
+    } else {
+      store.markPersistenceFault(companyId, message);
+      ctx.logger.warn("Failed to persist pending Aperture event state.", { companyId, error: message });
+    }
+    return false;
+  }
+}
+
+export async function ensureAttentionState(ctx: PluginContext, store: ApertureCompanyStore, companyId: string): Promise<HydratedAttentionState> {
   return runCompanyMutation(companyId, async () => {
-    if (!store.hasPendingPersistence(companyId)) return false;
-
-    const state = store.getPersistableState(companyId);
-    if (!state) return false;
-
     try {
-      await persistAttentionState(ctx, companyId, state);
-      store.markPersistenceHealthy(companyId);
-      return true;
+      await hydrateAttentionState(ctx, store, companyId);
+      await flushPendingAttentionState(ctx, store, companyId);
+      return inMemoryAttentionState(store, companyId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (isInvocationScopeDenied(error)) {
-        ctx.logger.warn("Aperture pending state could not be persisted in this host callback; will retry from the next scoped invocation.", {
-          companyId,
-          error: message,
-        });
-      } else {
-        store.markPersistenceFault(companyId, message);
-        ctx.logger.warn("Failed to persist pending Aperture event state.", {
-          companyId,
-          error: message,
-        });
-      }
-      return false;
+      if (!isInvocationScopeDenied(error)) throw error;
+      ctx.logger.warn("Aperture persisted state unavailable in this host callback; using in-memory attention state.", {
+        companyId, error: error instanceof Error ? error.message : String(error),
+      });
+      return inMemoryAttentionState(store, companyId);
     }
   });
 }
@@ -257,40 +318,32 @@ export async function runAttentionMutation<T extends PersistedAttentionMutation>
   store: ApertureCompanyStore,
   companyId: string,
   mutation: () => Promise<T> | T,
+  onPersisted?: (result: T) => void,
 ): Promise<T> {
   return runCompanyMutation(companyId, async () => {
-    const persistedState = await loadPersistedAttentionState(ctx, companyId);
+    await hydrateAttentionState(ctx, store, companyId);
     const previousLedger = store.getLedger(companyId);
     const previousSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
-    const previousReview = store.getReview(companyId)
-      ?? persistedState?.review
-      ?? createEmptyReviewState(companyId);
-    const fallbackState = persistedState ?? {
-      companyId,
-      ledger: previousLedger,
-      snapshot: previousSnapshot,
-      review: previousReview,
-    };
-
+    const previousReview = store.getReview(companyId) ?? createEmptyReviewState(companyId);
+    let persistenceAttempted = false;
     try {
       const result = await mutation();
-
-      try {
-        if (result.review) store.setReview(companyId, result.review);
-        await persistAttentionState(ctx, companyId, {
-          ledger: result.ledger,
-          snapshot: result.snapshot,
-          review: result.review ?? store.getReview(companyId) ?? previousReview,
-        });
-        store.markPersistenceHealthy(companyId);
-        return result;
-      } catch (error) {
-        store.restore(companyId, fallbackState);
-        store.markPersistenceFault(companyId, error instanceof Error ? error.message : String(error));
-        throw error;
-      }
+      if (result.review) store.setReview(companyId, result.review);
+      persistenceAttempted = true;
+      await persistAttentionState(ctx, companyId, {
+        ledger: result.ledger,
+        snapshot: result.snapshot,
+        review: result.review ?? store.getReview(companyId) ?? previousReview,
+      });
+      store.markPersistenceHealthy(companyId, result.ledger.length);
+      onPersisted?.(result);
+      return result;
     } catch (error) {
-      store.restore(companyId, fallbackState);
+      const arrivedEvents = store.getLedger(companyId).slice(previousLedger.length).filter((entry) => entry.kind === "event");
+      store.restore(companyId, { ledger: previousLedger, snapshot: previousSnapshot, review: previousReview });
+      for (const entry of arrivedEvents) store.applyEvent(companyId, entry);
+      if (arrivedEvents.length > 0) store.markPersistencePending(companyId);
+      if (persistenceAttempted) store.markPersistenceFault(companyId, error instanceof Error ? error.message : String(error));
       throw error;
     }
   });

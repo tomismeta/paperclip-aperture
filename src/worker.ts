@@ -11,6 +11,7 @@ function normalizeConfig(value: unknown): Record<string, unknown> {
 }
 
 const plugin = definePlugin({
+  multiCompanyConfig: true,
   async setup(ctx) {
     const store = new ApertureCompanyStore();
     registerDataHandlers(ctx, store);

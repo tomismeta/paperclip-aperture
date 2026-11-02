@@ -10,8 +10,15 @@ import { approvalBlockingSummary, approvalBlockingWhyNow } from "./attention-lan
 import { createInteractionId, createTaskId } from "./task-ref.js";
 import { withFocusDecisionMetadata } from "./contracts.js";
 import { createEmptySnapshot, type AttentionReviewState, type AttentionSnapshot, type StoredAttentionFrame } from "./types.js";
-import type { ApprovalRecord } from "../host/paperclip-approvals.js";
-export type { ApprovalRecord } from "../host/paperclip-approvals.js";
+export type ApprovalRecord = {
+  id: string;
+  companyId: string;
+  type: string;
+  status: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export function approvalTitle(record: ApprovalRecord): string {
   const payload = record.payload ?? {};
@@ -91,9 +98,6 @@ export function approvalRecordToFrame(record: ApprovalRecord): StoredAttentionFr
       actions: [
         { id: "approve", label: "Approve", kind: "approve", emphasis: "primary" },
         { id: "reject", label: "Reject", kind: "reject", emphasis: "danger" },
-        ...(budgetOverride
-          ? [{ id: "request-revision", label: "Request revision", kind: "cancel" as const, emphasis: "secondary" as const }]
-          : []),
       ],
     },
     provenance,
@@ -126,10 +130,18 @@ export function mergeSnapshotWithApprovals(
   approvals: ApprovalRecord[] | null,
   review: AttentionReviewState | null,
 ): AttentionSnapshot {
-  const approvalFrames = actionableApprovalRecords(approvals).map(approvalRecordToFrame);
   const base = snapshot ?? createEmptySnapshot(companyId);
-  const merged = mergeStoredFrames(base, companyId, [
-    ...approvalFrames.map((frame) => ({ frame, lane: "next" as const })),
-  ], review);
-  return merged;
+  if (approvals === null) return mergeStoredFrames(base, companyId, [], review);
+
+  const approvalFrames = actionableApprovalRecords(approvals).map(approvalRecordToFrame);
+  const withoutApprovals = {
+    ...base,
+    now: base.now?.taskId.startsWith("approval:") ? null : base.now,
+    next: base.next.filter((frame) => !frame.taskId.startsWith("approval:")),
+    ambient: base.ambient.filter((frame) => !frame.taskId.startsWith("approval:")),
+  };
+  return mergeStoredFrames(withoutApprovals, companyId, approvalFrames.map((frame) => ({
+    frame,
+    lane: "next" as const,
+  })), review);
 }

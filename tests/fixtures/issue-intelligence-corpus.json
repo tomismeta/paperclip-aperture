@@ -1,5 +1,37 @@
 [
   {
+    "name": "casual-agent-mention-is-not-ownership",
+    "issue": {
+      "id": "issue-casual-atlas",
+      "identifier": "APE-101",
+      "title": "Deployment notes",
+      "description": "The deployment is blocked.",
+      "status": "blocked"
+    },
+    "comment": "FYI @Atlas: the deployment notes are attached.",
+    "directory": { "agentNames": ["Atlas"] },
+    "expected": {
+      "intents": [],
+      "headline": "Blocked issue that may need operator intervention to move forward."
+    }
+  },
+  {
+    "name": "casual-ceo-mention-is-not-ownership",
+    "issue": {
+      "id": "issue-casual-ceo",
+      "identifier": "APE-102",
+      "title": "Deployment notes",
+      "description": "The deployment is blocked.",
+      "status": "blocked"
+    },
+    "comment": "FYI @ceo: the deployment notes are attached.",
+    "directory": { "agentNames": ["CEO"] },
+    "expected": {
+      "intents": [],
+      "headline": "Blocked issue that may need operator intervention to move forward."
+    }
+  },
+  {
     "name": "share-with-board-review-blocker",
     "issue": {
       "id": "issue-1",

@@ -33,11 +33,3 @@ export function approvalDecisionSuccessMessage(title: string, decision: "approve
 export function approvalDecisionFailureMessage(error: unknown): string {
   return actionErrorMessage(error, "Failed to submit approval decision.");
 }
-
-export function approvalRevisionSuccessMessage(title: string): string {
-  return `Requested revision for ${title}.`;
-}
-
-export function approvalRevisionFailureMessage(error: unknown): string {
-  return actionErrorMessage(error, "Failed to request approval revision.");
-}

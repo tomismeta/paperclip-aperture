@@ -1,4 +1,5 @@
 import {
+  useHostContext,
   type PluginPageProps,
   type PluginSidebarProps,
   type PluginWidgetProps,
@@ -35,6 +36,7 @@ import {
   useWideLayout,
 } from "./chrome.js";
 import {
+  AttentionLiveUpdates,
   actionableCount,
   actionableLabel,
   currentSurfaceBrand,
@@ -81,48 +83,61 @@ import {
 } from "./frame-explainability.js";
 import { IssueCommentComposer } from "./issue-comment-composer.js";
 import { useFocusPageActions } from "./use-focus-page-actions.js";
+import { InteractionActions, type InteractionResponseHandler } from "./interaction-actions.js";
+
+type InteractionOperatorProps = {
+  userId: string | null | undefined;
+  onRespond: InteractionResponseHandler;
+};
 
 type DisplayFrame = {
   frame: StoredAttentionFrame;
   lane: FrameLane;
 };
 
-function FrameActions(props: {
+function FrameActions(props: InteractionOperatorProps & {
   frame: StoredAttentionFrame;
   lane: FrameLane;
   pendingId: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
-  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
+  companyPrefix: string | null | undefined;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   compact?: boolean;
 }) {
   const actionMode = responseKind(props.frame, props.lane);
   const isPending = props.pendingId === props.frame.id;
+  const revisionHref = isBudgetOverride(props.frame) ? itemHref(props.frame, props.companyPrefix) : null;
 
   if (actionMode === "none") return null;
+  if (actionMode === "interaction") {
+    return <InteractionActions key={props.frame.interactionId} frame={props.frame} pendingId={props.pendingId} userId={props.userId} onRespond={props.onRespond} />;
+  }
 
   return (
     <div className={cn("flex items-center gap-2", props.compact && "justify-end")}>
       {actionMode === "approval" ? (
         <>
-          {isBudgetOverride(props.frame) ? (
-            <ActionButton
-              label="Request revision"
-              tone="secondary"
-              disabled={isPending}
-              onClick={() => void props.onRequestRevision(props.frame)}
-            />
+          {revisionHref ? (
+            <a
+              href={revisionHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Request revision in Paperclip
+              <ExternalLinkIcon />
+            </a>
           ) : null}
           <ActionButton
             label={isPending ? "Submitting\u2026" : "Approve"}
-            tone="primary"
+            tone="accent"
             disabled={isPending}
             onClick={() => void props.onApprove(props.frame)}
           />
           <ActionButton
             label="Reject"
-            tone="danger"
+            tone="accent"
             disabled={isPending}
             onClick={() => void props.onReject(props.frame)}
           />
@@ -147,6 +162,7 @@ function NowDetails(props: {
   frame: StoredAttentionFrame;
   snapshotUpdatedAt: string;
   companyPrefix: string | null | undefined;
+  fallbackSummary: string | null;
 }) {
   const { frame, snapshotUpdatedAt } = props;
   const href = itemHref(frame, props.companyPrefix);
@@ -155,7 +171,13 @@ function NowDetails(props: {
   const hasContext = visibleContextItems(frame).length > 0;
 
   return (
-    <div className="space-y-3 border-t border-border pt-4">
+    <div className="min-w-0 space-y-3 border-t border-border pt-4 [overflow-wrap:anywhere]">
+      {props.fallbackSummary ? (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+          {props.fallbackSummary}
+        </p>
+      ) : null}
+
       <ExplainabilityPanel frame={frame} lane="now" detailOnly />
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -226,7 +248,7 @@ function QuietNow() {
   );
 }
 
-function NowActionRail(props: {
+function NowActionRail(props: InteractionOperatorProps & {
   frame: StoredAttentionFrame;
   lane: FrameLane;
   wide?: boolean;
@@ -235,7 +257,6 @@ function NowActionRail(props: {
   onEngageFocus: (frame: StoredAttentionFrame, reason: "show_context" | "comment_compose") => void;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
-  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
@@ -251,32 +272,36 @@ function NowActionRail(props: {
       <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         Actions
       </div>
-      {actionMode === "approval" ? (
+      {actionMode === "interaction" ? (
+        <InteractionActions key={props.frame.interactionId} frame={props.frame} pendingId={props.pendingId} userId={props.userId} onRespond={props.onRespond} />
+      ) : actionMode === "approval" ? (
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <ActionButton
               label={isPending ? "Submitting…" : "Approve"}
-              tone="primary"
+              tone="accent"
               disabled={isPending}
               className="w-full"
               onClick={() => void props.onApprove(props.frame)}
             />
             <ActionButton
               label="Reject"
-              tone="danger"
+              tone="accent"
               disabled={isPending}
               className="w-full"
               onClick={() => void props.onReject(props.frame)}
             />
           </div>
-          {isBudgetOverride(props.frame) ? (
-            <ActionButton
-              label="Request revision"
-              tone="secondary"
-              disabled={isPending}
-              className="w-full"
-              onClick={() => void props.onRequestRevision(props.frame)}
-            />
+          {isBudgetOverride(props.frame) && props.itemLink ? (
+            <a
+              href={props.itemLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Request revision in Paperclip
+              <ExternalLinkIcon />
+            </a>
           ) : null}
         </div>
       ) : actionMode === "acknowledge" ? (
@@ -316,7 +341,7 @@ function NowActionRail(props: {
   );
 }
 
-function NowPane(props: {
+function NowPane(props: InteractionOperatorProps & {
   snapshot: AttentionSnapshot;
   posture: Posture;
   brand: SurfaceBrand;
@@ -326,7 +351,6 @@ function NowPane(props: {
   onEngageFocus: (frame: StoredAttentionFrame, reason: "show_context" | "comment_compose") => void;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
-  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
@@ -347,10 +371,10 @@ function NowPane(props: {
 
   return (
     <section
-      className="border border-border bg-card shadow-sm"
+      className="min-w-0 max-w-full border border-border bg-card shadow-sm [overflow-wrap:anywhere]"
       style={frame ? { borderLeftWidth: 3, borderLeftColor: ACCENT_COLOR } : undefined}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-border bg-accent px-4 py-3 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-accent px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
           <Accent className="text-sm leading-none">{props.posture.glyph}</Accent>
           <div className="flex items-end gap-2">
@@ -378,26 +402,28 @@ function NowPane(props: {
             <div
               className={wideLayout ? "flex items-start gap-6" : "space-y-4"}
             >
-              <div className="space-y-4" style={wideLayout ? { minWidth: 0, flex: 1 } : undefined}>
+              <div className="min-w-0 space-y-4" style={wideLayout ? { flex: 1 } : undefined}>
                 <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                   <span>Now</span>
                   <span className="normal-case tracking-normal text-muted-foreground/70">{sourceLabel(frame)}</span>
                 </div>
 
                 {recommendedMove ? (
-                  <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
-                    {recommendedMove}
+                  <>
+                    <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
+                      {recommendedMove}
+                    </div>
+                    <div className="flex items-start gap-2 text-xl font-medium leading-snug text-foreground/80">
+                      <UnreadDot visible={activeUnread} />
+                      <span className="min-w-0">{renderTitle(frame)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex max-w-4xl items-start gap-2 text-3xl font-semibold leading-tight text-foreground">
+                    <UnreadDot visible={activeUnread} />
+                    <span className="min-w-0">{renderTitle(frame)}</span>
                   </div>
-                ) : frame.summary ? (
-                  <div className="max-w-4xl text-3xl font-semibold leading-tight text-foreground">
-                    {frame.summary}
-                  </div>
-                ) : null}
-
-                <div className="flex items-start gap-2 text-xl font-medium leading-snug text-foreground/80">
-                  <UnreadDot visible={activeUnread} />
-                  <span>{renderTitle(frame)}</span>
-                </div>
+                )}
 
                 {helperLine ? (
                   <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
@@ -441,6 +467,8 @@ function NowPane(props: {
               </div>
 
               <NowActionRail
+                userId={props.userId}
+                onRespond={props.onRespond}
                 frame={frame}
                 lane="now"
                 wide={wideLayout}
@@ -449,7 +477,6 @@ function NowPane(props: {
                 onEngageFocus={props.onEngageFocus}
                 onApprove={props.onApprove}
                 onReject={props.onReject}
-                onRequestRevision={props.onRequestRevision}
                 onAcknowledge={props.onAcknowledge}
                 onComment={props.onComment}
               />
@@ -460,6 +487,7 @@ function NowPane(props: {
                 frame={frame}
                 snapshotUpdatedAt={props.snapshot.updatedAt}
                 companyPrefix={props.companyPrefix}
+                fallbackSummary={!recommendedMove ? frame.summary ?? null : null}
               />
             ) : null}
           </div>
@@ -474,7 +502,7 @@ function NowPane(props: {
 // Next lane — compact ranked rows
 // ---------------------------------------------------------------------------
 
-function NextRow(props: {
+function NextRow(props: InteractionOperatorProps & {
   rank: number;
   frame: StoredAttentionFrame;
   movement?: QueueMovement;
@@ -484,7 +512,6 @@ function NextRow(props: {
   pendingId: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
-  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
@@ -570,12 +597,14 @@ function NextRow(props: {
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <IssueCommentComposer frame={frame} pendingId={props.pendingId} onComment={props.onComment} />
             <FrameActions
+              userId={props.userId}
+              onRespond={props.onRespond}
               frame={frame}
               lane="next"
               pendingId={props.pendingId}
               onApprove={props.onApprove}
               onReject={props.onReject}
-              onRequestRevision={props.onRequestRevision}
+              companyPrefix={props.companyPrefix}
               onAcknowledge={props.onAcknowledge}
             />
           </div>
@@ -585,7 +614,7 @@ function NextRow(props: {
   );
 }
 
-function NextLane(props: {
+function NextLane(props: InteractionOperatorProps & {
   snapshot: AttentionSnapshot;
   rows: DisplayFrame[];
   movement: Record<string, QueueMovement>;
@@ -594,7 +623,6 @@ function NextLane(props: {
   pendingId: string | null;
   onApprove: (frame: StoredAttentionFrame) => Promise<void>;
   onReject: (frame: StoredAttentionFrame) => Promise<void>;
-  onRequestRevision: (frame: StoredAttentionFrame) => Promise<void>;
   onAcknowledge: (frame: StoredAttentionFrame) => Promise<void>;
   onComment: (frame: StoredAttentionFrame, body: string) => Promise<void>;
 }) {
@@ -611,7 +639,9 @@ function NextLane(props: {
       ) : (
         props.rows.map((row, i) => (
           <NextRow
-            key={row.frame.id}
+            userId={props.userId}
+            onRespond={props.onRespond}
+            key={JSON.stringify([row.frame.taskId, row.frame.interactionId])}
             rank={i + 1}
             frame={row.frame}
             movement={props.movement[row.frame.interactionId]}
@@ -621,7 +651,6 @@ function NextLane(props: {
             pendingId={props.pendingId}
             onApprove={props.onApprove}
             onReject={props.onReject}
-            onRequestRevision={props.onRequestRevision}
             onAcknowledge={props.onAcknowledge}
             onComment={props.onComment}
           />
@@ -711,14 +740,15 @@ export function DashboardWidget(props: PluginWidgetProps) {
   const brand = currentSurfaceBrand();
   const href = pluginPagePath(props.context.companyPrefix);
   const model = useAttentionModel(companyId);
+  const liveUpdates = <AttentionLiveUpdates key={companyId} companyId={companyId} refresh={model.refresh} />;
   const data = model.snapshot;
   const loading = model.loading;
   const error = model.error;
 
-  if (!companyId) return <MessageCard title={`Open ${brand.wordmark}`} body={`Open a company to see ${brand.wordmark}.`} />;
-  if (loading) return <WidgetLoadingState label={brand.loadingLabel} />;
-  if (error) return <MessageCard title="Plugin error" body={error.message} />;
-  if (!data) return <MessageCard title={brand.wordmark} body={brand.headingEmptyState} />;
+  if (!companyId) return <>{liveUpdates}<MessageCard title={`Open ${brand.wordmark}`} body={`Open a company to see ${brand.wordmark}.`} /></>;
+  if (loading) return <>{liveUpdates}<WidgetLoadingState label={brand.loadingLabel} /></>;
+  if (error) return <>{liveUpdates}<MessageCard title="Plugin error" body={error.message} /></>;
+  if (!data) return <>{liveUpdates}<MessageCard title={brand.wordmark} body={brand.headingEmptyState} /></>;
 
   const posture = postureForSnapshot(data);
   const leadingText = data.now ? (recommendedMoveValue(data.now) ?? data.now.title) : null;
@@ -731,6 +761,8 @@ export function DashboardWidget(props: PluginWidgetProps) {
         : undefined;
 
   return (
+    <>
+    {liveUpdates}
     <a href={href} className="block border border-border bg-card px-4 py-3 shadow-sm transition-colors hover:bg-accent/40" style={borderStyle}>
       <div className="flex items-start gap-2 text-xs">
         <Accent className="pt-0.5 text-sm">{posture.glyph}</Accent>
@@ -761,6 +793,7 @@ export function DashboardWidget(props: PluginWidgetProps) {
         <div className="mt-2 text-sm text-muted-foreground">No active interruption right now.</div>
       )}
     </a>
+    </>
   );
 }
 
@@ -774,11 +807,14 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
   const href = pluginPagePath(context.companyPrefix);
   const isActive = typeof window !== "undefined" && window.location.pathname === href;
   const model = useAttentionModel(companyId);
+  const liveUpdates = <AttentionLiveUpdates key={companyId} companyId={companyId} refresh={model.refresh} />;
   const merged = model.snapshot;
   const actionable = merged ? actionableCount(merged) : 0;
   const unread = unreadCount(merged);
 
   return (
+    <>
+    {liveUpdates}
     <a
       href={href}
       aria-current={isActive ? "page" : undefined}
@@ -828,6 +864,7 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
         </span>
       ) : null}
     </a>
+    </>
   );
 }
 
@@ -836,9 +873,11 @@ export function AttentionSidebarLink({ context }: PluginSidebarProps) {
 // ---------------------------------------------------------------------------
 
 export function AttentionPage(props: PluginPageProps) {
+  const { userId } = useHostContext();
   const companyId = props.context.companyId;
   const brand = currentSurfaceBrand();
   const model = useAttentionModel(companyId);
+  const liveUpdates = <AttentionLiveUpdates key={companyId} companyId={companyId} refresh={model.refresh} />;
   const snapshot = model.snapshot;
   const loading = model.loading;
   const error = model.error;
@@ -862,28 +901,35 @@ export function AttentionPage(props: PluginPageProps) {
     acknowledgeFrame,
     commentOnIssueFrame,
     submitApprovalDecision,
-    requestApprovalRevision,
+    submitInteractionDecision,
   } = useFocusPageActions({
     companyId,
     displaySnapshot,
     refresh: model.refresh,
   });
 
-  if (!companyId) return <MessageCard title={`Open ${brand.wordmark}`} body={`Select a company to open ${brand.wordmark}.`} />;
-  if (!displaySnapshot && loading) return <PageLoadingState label="Loading attention center" />;
-  if (!displaySnapshot && error) return <MessageCard title="Plugin error" body={error.message} />;
+  if (!companyId) return <>{liveUpdates}<MessageCard title={`Open ${brand.wordmark}`} body={`Select a company to open ${brand.wordmark}.`} /></>;
+  if (!displaySnapshot && loading) return <>{liveUpdates}<PageLoadingState label="Loading attention center" /></>;
+  if (!displaySnapshot && error) return <>{liveUpdates}<MessageCard title="Plugin error" body={error.message} /></>;
   if (!displaySnapshot || !posture) {
     return (
+      <>
+      {liveUpdates}
       <MessageCard
         title={`No ${brand.wordmark} State Yet`}
         body={`No ${brand.key === "focus" ? "focus" : "attention"} state has been captured for this company yet.`}
       />
+      </>
     );
   }
 
   return (
+    <>
+    {liveUpdates}
     <div className="space-y-4">
       <NowPane
+        userId={userId}
+        onRespond={submitInteractionDecision}
         snapshot={displaySnapshot}
         posture={posture}
         brand={brand}
@@ -893,12 +939,13 @@ export function AttentionPage(props: PluginPageProps) {
         onEngageFocus={holdNowFrame}
         onApprove={(frame) => submitApprovalDecision(frame, "approve")}
         onReject={(frame) => submitApprovalDecision(frame, "reject")}
-        onRequestRevision={requestApprovalRevision}
         onAcknowledge={acknowledgeFrame}
         onComment={commentOnIssueFrame}
       />
 
       <NextLane
+        userId={userId}
+        onRespond={submitInteractionDecision}
         snapshot={displaySnapshot}
         rows={nextRows}
         movement={nextMovement}
@@ -907,7 +954,6 @@ export function AttentionPage(props: PluginPageProps) {
         pendingId={pendingId}
         onApprove={(frame) => submitApprovalDecision(frame, "approve")}
         onReject={(frame) => submitApprovalDecision(frame, "reject")}
-        onRequestRevision={requestApprovalRevision}
         onAcknowledge={acknowledgeFrame}
         onComment={commentOnIssueFrame}
       />
@@ -919,7 +965,8 @@ export function AttentionPage(props: PluginPageProps) {
         companyPrefix={props.context.companyPrefix}
       />
 
-      <StatusToast message={statusOverride ?? backgroundErrorMessage} />
+      <StatusToast message={statusOverride ?? backgroundErrorMessage ?? model.syncError} />
     </div>
+    </>
   );
 }

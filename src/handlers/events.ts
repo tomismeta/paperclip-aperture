@@ -3,6 +3,7 @@ import { normalizeSourceEvent } from "@tomismeta/aperture-core/semantic";
 import type { ApertureCompanyStore } from "../aperture/core-store.js";
 import { mapPluginEventToAperture, mapPluginEventToSourceEvent } from "../aperture/event-mapper.js";
 import type { AttentionLedgerEventEntry } from "../aperture/types.js";
+import { createTaskId } from "../aperture/task-ref.js";
 
 const SUBSCRIBED_EVENTS: readonly string[] = [
   "activity.logged",
@@ -83,8 +84,9 @@ function invalidateIssueHostState(ctx: PluginContext, store: ApertureCompanyStor
       `issue:${issueId}:comments`,
       `issue:${issueId}:documents`,
       `issue:${issueId}:relations`,
+      `issue:${issueId}:interactions`,
     ] : [],
-    prefixes: ["issues:blocked", "issues:in_review"],
+    prefixes: ["issues:all"],
   });
   ctx.logger.info("Triggered Focus refresh from Paperclip host event", {
     companyId: event.companyId,
@@ -99,7 +101,19 @@ async function handleEvent(
   event: PluginEvent,
   config: Record<string, unknown>,
 ): Promise<void> {
-  if (!shouldCaptureEvent(config, event.eventType)) return;
+  const capturePrimary = shouldCaptureEvent(config, event.eventType);
+  const payload = payloadRecord(event.payload);
+  const issueStatus = payload.status;
+  const terminalIssue = event.eventType === "issue.updated" && event.entityType === "issue"
+    && (issueStatus === "done" || issueStatus === "cancelled");
+  if (event.eventType === "issue.updated" && event.entityType === "issue" && event.entityId
+    && (terminalIssue || payload.hiddenAt != null || payload.archivedAt != null)) {
+    store.retireDisplayCandidates(event.companyId, { issueId: event.entityId });
+  }
+  if (event.entityType === "approval" && event.entityId
+    && (payload.status === "approved" || payload.status === "rejected")) {
+    store.retireDisplayCandidates(event.companyId, { taskId: createTaskId("approval", event.entityId) });
+  }
 
   if (event.eventType === "activity.logged") {
     const payload = event.payload && typeof event.payload === "object"
@@ -108,16 +122,24 @@ async function handleEvent(
     const action = typeof payload.action === "string" ? payload.action : undefined;
     const entityType = typeof payload.entityType === "string" ? payload.entityType : event.entityType;
 
-    if (entityType === "issue" && action && ATTENTION_ACTIVITY_ACTIONS.has(action)) {
+    if (entityType === "issue" && action && (
+      ATTENTION_ACTIVITY_ACTIONS.has(action) || action.startsWith("issue.thread_interaction_")
+    )) {
+      const issueId = typeof payload.entityId === "string" ? payload.entityId : issueIdForHostRefresh(event);
+      const details = payloadRecord(payload.details);
+      if (action.startsWith("issue.thread_interaction_")
+        && typeof details.interactionId === "string" && details.interactionId.trim().length > 0
+        && typeof details.interactionStatus === "string"
+        && ["accepted", "rejected", "answered", "cancelled", "expired", "failed"].includes(details.interactionStatus)) {
+        store.retireDisplayCandidates(event.companyId, { taskId: createTaskId("interaction", details.interactionId) });
+      }
       store.invalidateHostCache(event.companyId, {
-        keys: event.entityId ? [
-          `issue:${event.entityId}:documents`,
-          `issue:${event.entityId}:relations`,
+        keys: issueId ? [
+          `issue:${issueId}:documents`,
+          `issue:${issueId}:relations`,
+          `issue:${issueId}:interactions`,
         ] : [],
-        prefixes: [
-          "issues:blocked",
-          "issues:in_review",
-        ],
+        prefixes: ["issues:all"],
       });
       ctx.logger.info("Triggered Focus refresh from activity log event", {
         companyId: event.companyId,
@@ -140,19 +162,30 @@ async function handleEvent(
         `issue:${event.entityId}:detail`,
         `issue:${event.entityId}:comments`,
         `issue:${event.entityId}:relations`,
+        `issue:${event.entityId}:interactions`,
       ],
-      prefixes: ["issues:blocked", "issues:in_review"],
+      prefixes: ["issues:all"],
     });
   } else if (event.entityType === "agent") {
     store.invalidateHostCache(event.companyId, {
       keys: ["agents:all"],
     });
   }
+  if (!capturePrimary && !terminalIssue) return;
 
   const enriched = event;
   const sourceEvent = mapPluginEventToSourceEvent(enriched);
   const mapped = sourceEvent ? normalizeSourceEvent(sourceEvent) : mapPluginEventToAperture(enriched);
-  if (!mapped) return;
+  if (!mapped) {
+    if (event.eventType.startsWith("agent.run.")) {
+      ctx.logger.warn("Ignored Paperclip run event without a run ID.", {
+        companyId: event.companyId,
+        eventType: event.eventType,
+        entityId: event.entityId,
+      });
+    }
+    return;
+  }
 
   if (enriched.entityType === "approval") {
     store.invalidateApprovals(enriched.companyId);
@@ -171,7 +204,9 @@ async function handleEvent(
     apertureEvent: mapped,
   };
 
-  store.applyEvent(enriched.companyId, ledgerEntry);
+  const previousLength = store.getLedger(enriched.companyId).length;
+  const result = store.applyEvent(enriched.companyId, ledgerEntry, { capturePrimary });
+  if (result.ledger.length === previousLength) return;
   store.markPersistencePending(enriched.companyId);
   ctx.logger.info("Captured Paperclip event for Aperture", {
     companyId: enriched.companyId,

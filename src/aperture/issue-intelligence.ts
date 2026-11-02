@@ -198,20 +198,22 @@ export function analyzeIssueTextSemantics(input: {
   };
 }
 
-function resolveAgentOwner(text: string, directory: IssueActorDirectory | undefined): string | null {
-  if (!directory || directory.agentNames.length === 0) return null;
-
-  const mentionMatch = text.match(/needed from\s+@([a-z0-9_-]+)/i) ?? text.match(/@([a-z0-9_-]+)/i);
-  if (mentionMatch?.[1]) {
-    const mentionKey = normalizeActorKey(mentionMatch[1]);
-    const fromMention = directory.agentNames.find((name) => normalizeActorKey(name) === mentionKey);
-    if (fromMention) return fromMention;
+function requestedOwner(text: string, directory: IssueActorDirectory | undefined): {
+  name: string;
+  kind: "agent" | "human";
+} | null {
+  const request = /\bneeded from[ \t]+|\bwaiting on[ \t]+(?=@)|\bneed\b[^\r\n]{0,60}?\bfrom[ \t]+(?=@)/gi;
+  for (const match of text.matchAll(request)) {
+    const target = text.slice(match.index + match[0].length);
+    const mention = target.match(/^@([a-z0-9_-]+)/i)?.[1];
+    const agent = directory?.agentNames.find((name) => mention
+      ? normalizeActorKey(name) === normalizeActorKey(mention)
+      : new RegExp(`^${escapeRegex(name)}(?=$|[^a-z0-9_-])`, "i").test(target));
+    if (agent) return { name: agent, kind: "agent" };
+    const human = mention ?? target.match(/^[A-Z][a-zA-Z0-9_-]*(?:[ \t]+[A-Z][a-zA-Z0-9_-]*)*/)?.[0];
+    if (human) return { name: human.split(/[ \t]+/).map(titleCase).join(" "), kind: "human" };
   }
-
-  return [...directory.agentNames]
-    .sort((left, right) => right.length - left.length)
-    .find((name) => new RegExp(`\\b${escapeRegex(name)}\\b`, "i").test(text))
-    ?? null;
+  return null;
 }
 
 export function analyzeIssueIntents(
@@ -226,25 +228,18 @@ export function analyzeIssueIntents(
     issueTarget: issueRelationTarget(issue.id),
   });
 
-  const agentOwner = resolveAgentOwner(text, directory);
-  const mentionMatch = text.match(/needed from\s+@([a-z0-9_-]+)/i) ?? text.match(/@([a-z0-9_-]+)/i);
-  const owner = agentOwner
-    ?? (mentionMatch?.[1]
-      ? titleCase(mentionMatch[1])
-      : /board should|board can/i.test(text)
+  const requested = requestedOwner(text, directory);
+  const owner = requested?.name
+    ?? (/board should|board can/i.test(text)
         ? "Board"
-        : /ceo agent|@ceo|\bceo\b/i.test(text)
+        : /(?<![@\w])ceo\b/i.test(text)
           ? "CEO"
           : /requires human|waiting on human|human review/i.test(text)
             ? "Human"
             : /operator intervention|operator review/i.test(text)
               ? "Operator"
               : null);
-  const ownerKind = agentOwner
-    ? "agent"
-    : owner
-      ? "human"
-      : null;
+  const ownerKind = requested?.kind ?? (owner ? "human" : null);
 
   return {
     ...semanticAnalysis,

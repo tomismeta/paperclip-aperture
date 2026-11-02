@@ -5,7 +5,7 @@ import {
   mergeSnapshotWithApprovals,
   type ApprovalRecord,
 } from "../src/aperture/approval-frames.js";
-import { createEmptyReviewState, createEmptySnapshot, type StoredAttentionFrame } from "../src/aperture/types.js";
+import { createEmptyReviewState, createEmptySnapshot, type AttentionSnapshot, type StoredAttentionFrame } from "../src/aperture/types.js";
 
 function createApprovalRecord(overrides: Partial<ApprovalRecord> = {}): ApprovalRecord {
   return {
@@ -71,6 +71,9 @@ describe("approval-frames", () => {
     expect(frame.responseSpec?.kind).toBe("approval");
     expect(frame.consequence).toBe("high");
     expect(frame.context?.items?.find((item) => item.id === "requested-amount")?.value).toBe("$500");
+    if (frame.responseSpec?.kind === "approval") {
+      expect(frame.responseSpec.actions.map((action) => action.id)).toEqual(["approve", "reject"]);
+    }
     expect(frame.metadata?.attention).toEqual({
       rationale: ["budget stop", "approval", "operator decision"],
     });
@@ -101,5 +104,25 @@ describe("approval-frames", () => {
 
     expect(merged.now?.taskId).toBe("issue:1");
     expect(merged.next.map((frame) => frame.taskId)).toContain("approval:approval-2");
+  });
+
+  it("replaces only the approval domain on authoritative empty, but retains it on unavailable reads", () => {
+    const issue = createNonApprovalFrame();
+    const interaction = { ...issue, id: "interaction-frame", taskId: "interaction:one", interactionId: "interaction:one:decision" };
+    const approval = approvalRecordToFrame(createApprovalRecord());
+    const snapshot = {
+      ...createEmptySnapshot("company-1"),
+      now: approval,
+      next: [issue, interaction],
+      counts: { now: 1, next: 2, ambient: 0, total: 3 },
+    };
+    const review = createEmptyReviewState("company-1");
+    const empty = mergeSnapshotWithApprovals(snapshot, "company-1", [], review);
+    const unavailable = mergeSnapshotWithApprovals(snapshot, "company-1", null, review);
+    const tasks = (value: AttentionSnapshot) => [value.now, ...value.next, ...value.ambient].filter(Boolean).map((frame) => frame?.taskId);
+    expect(tasks(empty)).toEqual(expect.arrayContaining(["issue:1", "interaction:one"]));
+    expect(tasks(empty)).not.toContain("approval:approval-1");
+    expect(empty.counts.total).toBe(2);
+    expect(tasks(unavailable)).toEqual(expect.arrayContaining(["issue:1", "interaction:one", "approval:approval-1"]));
   });
 });

@@ -6,7 +6,9 @@ import {
   type AttentionResponse,
 } from "@tomismeta/aperture-core";
 import type { ApertureTrace } from "@tomismeta/aperture-core/trace";
-import type { StoredFrameCandidate } from "./frame-model.js";
+import type { DisplayEngagement, StoredFrameCandidate } from "./frame-model.js";
+import { readFocusMetadata } from "./contracts.js";
+import { createTaskId } from "./task-ref.js";
 import {
   createAttentionSnapshot,
   createEmptyLedger,
@@ -23,7 +25,14 @@ import {
   type SnapshotSource,
 } from "./types.js";
 import { FOCUS_SURFACE_CAPABILITIES } from "./core-capabilities.js";
-import type { ApprovalRecord } from "../host/paperclip-approvals.js";
+import type { ApprovalRecord } from "./approval-frames.js";
+import { deriveReviewStateFromLedger } from "./persisted-state.js";
+import {
+  createRunLifecycleIndex,
+  deriveRunRetirements,
+  observeRunLifecycleEntry,
+  type RunLifecycleIndex,
+} from "./run-lifecycle.js";
 
 type CachedCandidates = {
   key: string;
@@ -46,11 +55,16 @@ type CompanySession = {
   core: ApertureCore;
   snapshot: AttentionSnapshot | null;
   ledger: AttentionLedger;
+  runIndex: RunLifecycleIndex;
   review: AttentionReviewState;
+  hydrated: boolean;
+  pendingHydrationEvents: Map<string, { entry: AttentionLedgerEventEntry; capturePrimary: boolean }>;
   pendingPersistence: boolean;
   eventCount: number;
   traces: ApertureTrace[];
   reconciledCandidates: CachedCandidates | null;
+  lastGoodReconciledCandidates: StoredFrameCandidate[] | null;
+  displayEngagement: DisplayEngagement | null;
   approvals: {
     records: ApprovalRecord[] | null;
     dirty: boolean;
@@ -67,6 +81,7 @@ const MAX_TRACE_HISTORY = 100;
 const MAX_COMPANY_SESSIONS = 100;
 const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const RECONCILED_CANDIDATE_TTL_MS = 15_000;
+const APPROVAL_CACHE_TTL_MS = 15_000;
 
 export class ApertureCompanyStore {
   private readonly sessions = new Map<string, CompanySession>();
@@ -132,7 +147,7 @@ export class ApertureCompanyStore {
         cacheEntries: session.hostCache.size,
         hostDataRevision: session.hostDataRevision,
         approvalRecords: session.approvals.records?.length ?? 0,
-        approvalsDirty: session.approvals.dirty,
+        approvalsDirty: this.approvalsDirty(companyId),
         approvalAdapterLastLoadedAt: session.approvals.lastLoadedAt,
         approvalAdapterLastError: session.approvals.lastError,
       },
@@ -142,6 +157,10 @@ export class ApertureCompanyStore {
 
   hasSession(companyId: string): boolean {
     return this.sessions.has(companyId);
+  }
+
+  hasHydratedState(companyId: string): boolean {
+    return this.sessions.get(companyId)?.hydrated ?? false;
   }
 
   hydrate(
@@ -156,7 +175,7 @@ export class ApertureCompanyStore {
     review: AttentionReviewState;
   } {
     const existing = this.sessions.get(companyId);
-    if (existing) {
+    if (existing?.hydrated) {
       this.touchSession(existing);
       return {
         snapshot: existing.snapshot ?? createAttentionSnapshot(companyId, existing.core.getAttentionView()),
@@ -164,8 +183,22 @@ export class ApertureCompanyStore {
       };
     }
 
-    const session = this.buildSession(companyId, input);
+    const session = this.buildSession(companyId, input, existing);
+    session.hydrated = true;
+    session.pendingHydrationEvents = new Map();
     this.sessions.set(companyId, session);
+    // Reapply live facts after durable history, including capture-disabled closure facts.
+    if (existing?.pendingHydrationEvents.size) {
+      try {
+        for (const { entry, capturePrimary } of existing.pendingHydrationEvents.values()) {
+          this.applyEvent(companyId, entry, { capturePrimary });
+        }
+        session.pendingPersistence = true;
+      } catch (error) {
+        this.sessions.set(companyId, existing);
+        throw error;
+      }
+    }
     this.pruneSessions();
     return {
       snapshot: session.snapshot ?? createAttentionSnapshot(companyId, session.core.getAttentionView()),
@@ -273,6 +306,65 @@ export class ApertureCompanyStore {
     return [...candidates];
   }
 
+  getLastGoodReconciledCandidates(companyId: string): StoredFrameCandidate[] | null {
+    const session = this.sessions.get(companyId);
+    if (session) this.touchSession(session);
+    return session?.lastGoodReconciledCandidates ? [...session.lastGoodReconciledCandidates] : null;
+  }
+
+  setLastGoodReconciledCandidates(companyId: string, candidates: StoredFrameCandidate[]): void {
+    this.ensureSession(companyId).lastGoodReconciledCandidates = [...candidates];
+  }
+
+  getDisplayEngagement(companyId: string): DisplayEngagement | null {
+    const session = this.sessions.get(companyId);
+    if (!session) return null;
+    this.touchSession(session);
+    if (session.displayEngagement && Date.now() >= session.displayEngagement.expiresAt) {
+      session.displayEngagement = null;
+    }
+    return session.displayEngagement;
+  }
+
+  setDisplayEngagement(companyId: string, engagement: DisplayEngagement): void {
+    this.ensureSession(companyId).displayEngagement = engagement;
+  }
+
+  clearDisplayEngagement(companyId: string): void {
+    const session = this.sessions.get(companyId);
+    if (session) session.displayEngagement = null;
+  }
+
+  hasCoreInteraction(companyId: string, taskId: string, interactionId: string): boolean {
+    const view = this.sessions.get(companyId)?.core.getTaskView(taskId);
+    return !!view && (view.now?.interactionId === interactionId
+      || view.next.some((frame) => frame.interactionId === interactionId)
+      || view.ambient.some((frame) => frame.interactionId === interactionId));
+  }
+
+  // Retain uncertainty on failed reads, but never retain candidates contradicted by known host facts.
+  retireDisplayCandidates(companyId: string, target: { taskId?: string; issueId?: string }): void {
+    const session = this.sessions.get(companyId);
+    if (!session) return;
+    const taskId = target.taskId ?? (target.issueId ? createTaskId("issue", target.issueId) : undefined);
+    const matches = ({ frame }: StoredFrameCandidate) => frame.taskId === taskId
+      || (!!target.issueId && readFocusMetadata(frame).issueId === target.issueId);
+    const retired = session.lastGoodReconciledCandidates?.filter(matches) ?? [];
+    const engagement = session.displayEngagement;
+    if (engagement && (engagement.taskId === taskId
+      || retired.some(({ frame }) => frame.taskId === engagement.taskId))) {
+      session.displayEngagement = null;
+    }
+    if (retired.length > 0) {
+      session.lastGoodReconciledCandidates = session.lastGoodReconciledCandidates!.filter((candidate) => !matches(candidate));
+    }
+    const approvals = session.approvals.records;
+    const remainingApprovals = approvals?.filter((record) => createTaskId("approval", record.id) !== taskId);
+    const retiredApproval = !!approvals && remainingApprovals?.length !== approvals.length;
+    if (retiredApproval) session.approvals.records = remainingApprovals!;
+    if (retired.length > 0 || retiredApproval) this.invalidateReconciled(companyId);
+  }
+
   getReconciledRevision(companyId: string): number {
     return this.sessions.get(companyId)?.hostDataRevision ?? 0;
   }
@@ -346,7 +438,11 @@ export class ApertureCompanyStore {
   approvalsDirty(companyId: string): boolean {
     const session = this.sessions.get(companyId);
     if (session) this.touchSession(session);
-    return session?.approvals.dirty ?? true;
+    return !session
+      || session.approvals.dirty
+      || session.approvals.records === null
+      || !session.approvals.lastLoadedAt
+      || Date.now() - Date.parse(session.approvals.lastLoadedAt) >= APPROVAL_CACHE_TTL_MS;
   }
 
   invalidateApprovals(companyId: string): void {
@@ -358,6 +454,7 @@ export class ApertureCompanyStore {
       lastLoadedAt: session.approvals.lastLoadedAt,
       lastError: session.approvals.lastError,
     };
+    this.invalidateReconciled(companyId);
   }
 
   markApprovalAdapterFailure(companyId: string, error: string): void {
@@ -389,10 +486,10 @@ export class ApertureCompanyStore {
     };
   }
 
-  markPersistenceHealthy(companyId: string): void {
+  markPersistenceHealthy(companyId: string, persistedEntryCount: number): void {
     const session = this.sessions.get(companyId);
     if (!session) return;
-    session.pendingPersistence = false;
+    session.pendingPersistence = session.ledger.length !== persistedEntryCount;
     session.persistence = {
       state: "healthy",
       updatedAt: new Date().toISOString(),
@@ -411,37 +508,67 @@ export class ApertureCompanyStore {
   appendLedgerEntry(companyId: string, entry: AttentionLedgerEntry): AttentionLedger {
     const session = this.ensureSession(companyId);
     session.ledger = [...session.ledger, entry];
+    if (entry.kind === "event") observeRunLifecycleEntry(session.runIndex, entry);
     return this.getLedger(companyId);
   }
 
-  applyEvent(companyId: string, entry: AttentionLedgerEventEntry): {
+  applyEvent(
+    companyId: string,
+    entry: AttentionLedgerEventEntry,
+    options: { capturePrimary?: boolean } = {},
+  ): {
     frame: AttentionFrame | null;
     ledger: AttentionLedger;
     snapshot: AttentionSnapshot;
   } {
     const session = this.ensureSession(companyId);
     const previousLedger = session.ledger;
-    const previousSnapshot = session.snapshot;
-    const previousEventCount = session.eventCount;
-
-    session.ledger = [...session.ledger, entry];
-
+    const previousReview = session.review;
+    const existingIds = new Set<string>();
+    for (const applied of previousLedger) {
+      existingIds.add(applied.id);
+      if (applied.kind === "event") {
+        existingIds.add(applied.apertureEvent.id);
+        if (applied.sourceEvent) existingIds.add(applied.sourceEvent.id);
+      }
+    }
+    if (existingIds.has(entry.id) || existingIds.has(entry.apertureEvent.id)
+      || (entry.sourceEvent && existingIds.has(entry.sourceEvent.id))) {
+      return { frame: null, ledger: this.getLedger(companyId), snapshot: this.syncSnapshotFromCore(companyId, session) };
+    }
+    const batch = [
+      ...(options.capturePrimary === false ? [] : [entry]),
+      ...deriveRunRetirements(session.runIndex, entry),
+    ].filter((candidate) => {
+      const ids = [candidate.id, candidate.apertureEvent.id, ...(candidate.sourceEvent ? [candidate.sourceEvent.id] : [])];
+      if (ids.some((id) => existingIds.has(id))) return false;
+      for (const id of ids) existingIds.add(id);
+      return true;
+    });
+    if (batch.length === 0) {
+      if (!session.hydrated) session.pendingHydrationEvents.set(entry.id, { entry, capturePrimary: options.capturePrimary !== false });
+      return { frame: null, ledger: this.getLedger(companyId), snapshot: this.syncSnapshotFromCore(companyId, session) };
+    }
     try {
-      const frame = entry.sourceEvent
-        ? session.core.publishSourceEvent(entry.sourceEvent)
-        : session.core.publish(entry.apertureEvent);
-      session.eventCount += 1;
+      let frame: AttentionFrame | null = null;
+      for (const candidate of batch) {
+        const published = candidate.sourceEvent
+          ? session.core.publishSourceEvent(candidate.sourceEvent)
+          : session.core.publish(candidate.apertureEvent);
+        if (candidate === entry) frame = published;
+        observeRunLifecycleEntry(session.runIndex, candidate);
+        session.eventCount += 1;
+      }
+      session.ledger = [...previousLedger, ...batch];
       session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), entry.source, entry.occurredAt);
-      session.reconciledCandidates = null;
-      return {
-        frame,
-        ledger: this.getLedger(companyId),
-        snapshot: session.snapshot,
-      };
+      if (!session.hydrated) session.pendingHydrationEvents.set(entry.id, { entry, capturePrimary: options.capturePrimary !== false });
+      this.invalidateReconciled(companyId);
+      return { frame, ledger: this.getLedger(companyId), snapshot: session.snapshot };
     } catch (error) {
-      session.ledger = previousLedger;
-      session.snapshot = previousSnapshot;
-      session.eventCount = previousEventCount;
+      this.sessions.set(companyId, this.buildSession(companyId, {
+        ledger: previousLedger,
+        review: previousReview,
+      }, session));
       throw error;
     }
   }
@@ -506,6 +633,7 @@ export class ApertureCompanyStore {
   replaceLedger(companyId: string, ledger: AttentionLedger): AttentionLedger {
     const session = this.ensureSession(companyId);
     session.ledger = [...ledger];
+    session.runIndex = createRunLifecycleIndex(ledger);
     session.reconciledCandidates = null;
     return this.getLedger(companyId);
   }
@@ -614,8 +742,10 @@ export class ApertureCompanyStore {
     previous?: CompanySession,
   ): CompanySession {
     const session = this.createSession(companyId);
+    if (previous) session.core.setOperatorPresence(previous.core.getOperatorPresence());
     session.ledger = [...input.ledger];
-    session.review = input.review ?? createEmptyReviewState(companyId);
+    session.runIndex = createRunLifecycleIndex(input.ledger);
+    session.review = deriveReviewStateFromLedger(companyId, input.ledger, input.review ?? null);
     session.approvals = {
       records: previous?.approvals.records ? [...previous.approvals.records] : null,
       dirty: previous?.approvals.dirty ?? true,
@@ -626,6 +756,13 @@ export class ApertureCompanyStore {
     session.hostDataRevision = previous?.hostDataRevision ?? 0;
     session.persistence = previous?.persistence ?? healthyPersistenceStatus();
     session.traces = previous ? [...previous.traces] : [];
+    session.pendingPersistence = previous?.pendingPersistence ?? false;
+    session.hydrated = previous?.hydrated ?? false;
+    if (previous) session.pendingHydrationEvents = previous.pendingHydrationEvents;
+    session.reconciledCandidates = previous?.reconciledCandidates ?? null;
+    session.lastGoodReconciledCandidates = previous?.lastGoodReconciledCandidates ?? null;
+    const engagement = previous?.displayEngagement;
+    if (engagement && Date.now() < engagement.expiresAt) session.displayEngagement = engagement;
 
     if (input.ledger.length > 0) {
       let lastSource: SnapshotSource | undefined;
@@ -651,6 +788,15 @@ export class ApertureCompanyStore {
       session.snapshot = input.snapshot ?? createAttentionSnapshot(companyId, session.core.getAttentionView());
     }
 
+    const previousNow = previous?.core.getAttentionView().now;
+    if (session.displayEngagement && previousNow?.taskId === session.displayEngagement.taskId
+      && previousNow.interactionId === session.displayEngagement.interactionId) {
+      session.core.engage(session.displayEngagement.taskId, session.displayEngagement.interactionId, {
+        durationMs: Math.max(25, session.displayEngagement.expiresAt - Date.now()),
+      });
+      session.snapshot = createAttentionSnapshot(companyId, session.core.getAttentionView(), session.snapshot?.lastEvent);
+    }
+
     session.persistence = previous?.persistence?.state === "faulted"
       ? previous.persistence
       : healthyPersistenceStatus();
@@ -667,11 +813,16 @@ export class ApertureCompanyStore {
       core,
       snapshot: null,
       ledger: createEmptyLedger(),
+      runIndex: createRunLifecycleIndex(),
       review: createEmptyReviewState(companyId),
+      hydrated: false,
+      pendingHydrationEvents: new Map(),
       pendingPersistence: false,
       eventCount: 0,
       traces: [],
       reconciledCandidates: null,
+      lastGoodReconciledCandidates: null,
+      displayEngagement: null,
       approvals: {
         records: null,
         dirty: true,

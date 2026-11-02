@@ -15,11 +15,11 @@ importers:
   .:
     dependencies:
       '@paperclipai/plugin-sdk':
-        specifier: 2026.722.0
-        version: 2026.722.0(react@19.2.4)
+        specifier: 2026.1023.0
+        version: 2026.1023.0(react@19.2.4)
       '@tomismeta/aperture-core':
-        specifier: 0.9.0
-        version: 0.9.0
+        specifier: 0.10.0
+        version: 0.10.0
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -216,8 +216,9 @@ packages:
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
-  '@paperclipai/plugin-sdk@2026.722.0':
-    resolution: {integrity: sha512-2rMJCBo8ZAouuMsapdaY4/l+oHmrXKHW/k/HfPOLCxFng7+g04c5JhoFq+/ptGfNcW3kXzs34y7brviDCml06Q==}
+  '@paperclipai/plugin-sdk@2026.1023.0':
+    resolution: {integrity: sha512-n0kNdEbFekD675ElKOhbV4wYowcxpwCNU8/Jtkl2WeAqIVgdxUyih4i9pAcbiIX67e21Jzpl1jMSgIjKZ5VIvw==}
+    engines: {node: '>=24.11.0'}
     hasBin: true
     peerDependencies:
       react: '>=18'
@@ -225,8 +226,9 @@ packages:
       react:
         optional: true
 
-  '@paperclipai/shared@2026.722.0':
-    resolution: {integrity: sha512-JciI6EbtNwHSeoyN5ZkshwqpyfIluyO46JHp8I7pPCvpJ7Uv7MSZEBs3lKXdXLadFEN6qzfwNmf39xjIFC8isA==}
+  '@paperclipai/shared@2026.1023.0':
+    resolution: {integrity: sha512-IWW78idhIw2MDM41tznnN83Fi/O8WlTIS6Sa6eoQYG1COQDEXaTTKsRO7+ekDd0DhNDuPNpi5Dzrc4ocUREmWQ==}
+    engines: {node: '>=24.11.0'}
 
   '@rollup/rollup-android-arm-eabi@4.59.0':
     resolution: {integrity: sha512-upnNBkA6ZH2VKGcBj9Fyl9IGNPULcjXRlg0LLeaioQWueH30p6IXtJEbKAgvyv+mJaMxSm1l6xwDXYjpEMiLMg==}
@@ -366,8 +368,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@tomismeta/aperture-core@0.9.0':
-    resolution: {integrity: sha512-s7Hx5XIorXMOvlb75goszLliYovfpFHbFduH+ne7xHoW7LOBsaP/qC4ucLXY/QwoTvDzcmWVAyq5zFGN42OTjg==}
+  '@tomismeta/aperture-core@0.10.0':
+    resolution: {integrity: sha512-lYG6Ht0roOn2bZXaQhvgDVWOqZxnlOhTvDGPPBODKNAriLo9IXQRIoiWwFo0CeMHGWQBq/XqnGhCMzjQMQGq3A==}
     engines: {node: '>=18'}
 
   '@types/chai@5.2.3':
@@ -566,6 +568,9 @@ packages:
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
 
+  three@0.185.1:
+    resolution: {integrity: sha512-5aojFCXKwnjBRZvUnt3WFfEcvUJgkN5LlijRFN95hMy8WVkG4I0QNcJE+OuWvuJ0bOdStrbfXn0pkd6/QyiAlg==}
+
   tinybench@2.9.0:
     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
 
@@ -682,8 +687,8 @@ packages:
     engines: {node: '>=8'}
     hasBin: true
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
@@ -767,16 +772,17 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@paperclipai/plugin-sdk@2026.722.0(react@19.2.4)':
+  '@paperclipai/plugin-sdk@2026.1023.0(react@19.2.4)':
     dependencies:
-      '@paperclipai/shared': 2026.722.0
-      zod: 3.25.76
+      '@paperclipai/shared': 2026.1023.0
+      zod: 4.6.7
     optionalDependencies:
       react: 19.2.4
 
-  '@paperclipai/shared@2026.722.0':
+  '@paperclipai/shared@2026.1023.0':
     dependencies:
-      zod: 3.25.76
+      three: 0.185.1
+      zod: 4.6.7
 
   '@rollup/rollup-android-arm-eabi@4.59.0':
     optional: true
@@ -853,7 +859,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.59.0':
     optional: true
 
-  '@tomismeta/aperture-core@0.9.0': {}
+  '@tomismeta/aperture-core@0.10.0': {}
 
   '@types/chai@5.2.3':
     dependencies:
@@ -1077,6 +1083,8 @@ snapshots:
     dependencies:
       js-tokens: 9.0.1
 
+  three@0.185.1: {}
+
   tinybench@2.9.0: {}
 
   tinyexec@0.3.2: {}
@@ -1184,4 +1192,4 @@ snapshots:
       siginfo: 2.0.0
       stackback: 0.0.2
 
-  zod@3.25.76: {}
+  zod@4.6.7: {}

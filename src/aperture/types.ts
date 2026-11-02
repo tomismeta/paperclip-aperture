@@ -85,6 +85,7 @@ export type AttentionLedgerOverlayResponseEntry = {
   overlay: {
     kind: "approval_overlay" | "display_overlay";
     reason: string;
+    compatibility?: "core-0.9-approval-acknowledgement";
   };
 };
 
@@ -174,6 +175,8 @@ export type AttentionOverlayFrameReport = {
 
 export type AttentionOverlayDiagnostics = {
   generatedAt: string;
+  approvalSyncError?: string;
+  reconciliationSyncError?: string;
   summary: {
     coreFrames: number;
     reconciledFrames: number;
@@ -219,6 +222,8 @@ export type AttentionDisplayPayload = {
   companyId: string;
   snapshot: AttentionSnapshot;
   reviewState: AttentionReviewState;
+  approvalSyncError?: string;
+  reconciliationSyncError?: string;
 };
 
 export type AttentionReplayScenarioStep =
@@ -275,6 +280,7 @@ export type AttentionReviewState = {
   frames: Record<string, {
     lastSeenAt?: string;
     suppressedAt?: string;
+    suppressedInteractionId?: string;
   }>;
 };
 

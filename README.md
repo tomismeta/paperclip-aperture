@@ -13,191 +13,134 @@
 <p></p>
 </div>
 
-Paperclip Aperture adds a Focus surface to Paperclip that turns approvals, issue activity, and other human-facing signals into `now`, `next`, and `ambient`.
+Paperclip Aperture adds a **Focus** surface to Paperclip, turning approvals, issue activity, and agent signals into three attention lanes:
 
-It is designed as a live attention layer, not an inbox clone:
+- **now** — the single item that most needs your attention
+- **next** — the queue behind it
+- **ambient** — low-pressure awareness without an immediate demand for action
 
-- `now` shows the single most interrupting item
-- `next` stages the queue behind it
-- `ambient` keeps low-pressure awareness visible without demanding action
-- unread state is secondary to action pressure, so Focus stays judgment-first instead of becoming a second inbox
+Inbox tells you what changed. Focus tells you what deserves attention now, with recommended moves and reasoning attached to the cards.
 
-Put differently:
+## Requirements
 
-- Inbox tells you what changed
-- Focus tells you what deserves attention now
-- Inbox mirrors source records
-- Focus re-stacks them into an operator-facing queue with recommended moves
+- **Node.js:** `>=24.11.0`
+- **Paperclip:** official, unmodified `2026.1023.0` is the minimum API baseline and the tested stock host. Newer host versions are not automatically certified. See [known limitations](#known-limitations).
+- **Aperture Core:** `0.10.0`, included as a dependency alongside `@paperclipai/plugin-sdk@2026.1023.0`
+
+Version **0.6.0** upgrades the published `0.5.1` baseline from Core `0.9.0`, retaining the worker-owned integration and existing Focus behavior. No Paperclip fork or host patch is required.
 
 ## Install
 
-```bash
-npx paperclipai plugin install @tomismeta/paperclip-aperture
-```
-
-If you need Paperclip first:
+Authenticate the CLI as an instance administrator for the intended Paperclip host, then check its target before installing. Set the URL below to that host:
 
 ```bash
-npx paperclipai onboard --yes
-npx paperclipai run
+export PAPERCLIP_API_BASE="http://127.0.0.1:3100"
+npx paperclipai@2026.1023.0 plugin target --api-base "$PAPERCLIP_API_BASE"
+npx paperclipai@2026.1023.0 plugin install @tomismeta/paperclip-aperture --version 0.6.0 --api-base "$PAPERCLIP_API_BASE"
 ```
 
-Then install the plugin with the command above.
+The pinned CLI selects a client version; it does not upgrade or patch the server. If you need Paperclip first, follow its [host setup instructions](https://github.com/paperclipai/paperclip).
 
-After install, open Paperclip and use the `Focus` entry in the sidebar.
+After installation, open Paperclip and select **Focus** in the sidebar. No plugin-specific API-base configuration or outbound HTTP access is required for approval handling; CLI `--api-base` selects the host and is separate from plugin configuration.
+
+## What you get
+
+- A Focus page, sidebar entry, and dashboard widget.
+- Dynamic attention lanes with issue-aware recommendations, document/dependency context, and routing that distinguishes company agents from human operators.
+- Native approval actions and inline plain confirmations with host-verified human attribution and fresh eligibility checks. Budget revisions, questions, and specialized requests hand off to native Paperclip pages.
+- Separate cards for multiple decisions on the same issue; resolving one does not dismiss its siblings.
+- Inline issue comments, with long summaries and failure diagnostics kept under **Show context** rather than crowding the headline.
+- Durable acknowledgement and suppression backed by saved review state and ledger replay.
+- Separate run-failure attention that preserves execution history and reflects authoritative retry/watchdog facts when the host supplies them.
+- Diagnostics exports for the live Core state, the plugin-composed display, synchronization errors, and bounded Core traces.
+
+## Understanding Focus
+
+Reasoning stays attached to the cards you are acting on:
+
+- **Why now** explains why the current item outranks the queue.
+- **Why next** explains why an item is staged behind it.
+- **Confidence** shows the strength of the semantic signal when available.
+- **Signals** lists the factors that brought an item into attention.
+- **Thread context** and **Related activity** show the surrounding episode.
+
+Unread state is secondary to action pressure: an unread item is not automatically the most important item.
+
+### Keeping your place
+
+Opening **Show context** requests a 20-second focus hold; opening the comment composer requests 45 seconds. Holds preserve the current task or interaction against ordinary queue promotion while still showing fresh host content. Explicit urgency, Core preemption, terminal state, suppression, replacement, and ambient recovery can still take precedence.
+
+Reads do not extend a hold. Expiry, worker restart, and session eviction end it. Comment drafts stay local to the mounted company/task/interaction and survive timestamp-only updates, but are not durable across displacement or company changes.
+
+### Synchronization and persistence
+
+Failed reconciliation keeps the last complete candidate set visible with a synchronization warning. Fresh summary/export reads require successful issue, agent, and interaction reconciliation; native approval overlays use a separate 15-second cache with event/action invalidation, including in exports.
+
+Issue discovery uses the supported unpaged SDK collection; agent discovery remains paginated. Neither has a plugin-imposed total cap. Complete issue discovery depends on the host returning the complete accessible collection.
+
+Company changes withhold the previous company's display while the new scope loads. Local review updates are serialized with persistence so concurrent tabs retain each other's acknowledgements.
+
+Native comment writes and local state persistence are separate transactions. If Paperclip confirms a comment but local persistence fails, Focus reports that it posted with a synchronization warning rather than asking you to repost. Unknown native-write outcomes still report an error; this is not an exactly-once guarantee.
+
+Subscription callbacks remain in memory until a scoped read or action hydrates and flushes state. A worker restart, the 30-minute idle eviction, or the 100-company session cap can discard unflushed callback facts. Saved history and review state are persisted separately from that pending buffer.
+
+## Upgrading from 0.5.1
+
+Back up host data and plugin configuration before upgrading, and meet the host and Node.js requirements above.
+
+- Persisted attention state migrates from schema 3 to schema 5. Legacy approval acknowledgements remain local audit/suppression records; they do not become native approval decisions.
+- Approval reads and decisions now use the native company-scoped SDK client. Stored `paperclipApiBase` values are ignored; the legacy worker HTTP adapter is removed.
+- Approve/reject and issue comments require a host-authenticated human operator and retain that human's attribution.
+- Do not purge plugin state or run an older worker against schema 5.
+
+The native migration qualification used a no-force local-package switch and a cold host/worker restart. It does not certify the host's version-only upgrade endpoint or every historical state.
+
+## Architecture
+
+- **Aperture Core** owns continuity, replay, and attention mechanics through the existing stateful `ApertureCore` integration.
+- **The plugin worker** owns ingestion, review state, reconciliation, display composition, and Paperclip-specific candidate/lane policy. The result is Core-backed, not Core-only.
+- **Paperclip** owns native issue, interaction, and approval records, authorization, and the UI shell.
+
+The worker resolves configuration per company. Configuration changes retain the host's worker-restart behavior. Diagnostics distinguish Core judgment, reconciliation, approval overlays, and final display promotion.
+
+## Known limitations
+
+These limitations apply to the stock host and remain part of this release:
+
+- **Updates are not always instant.** Focus uses a 15-second visible-page polling cycle, plus visibility and action refresh. Reliable cross-client push is unavailable on the observed stock host; its stream endpoint returned HTTP 501.
+- **Recovery visibility is incomplete.** The public worker API does not expose all retry/recovery facts. Complete recovery context and actual continuation are not certified. Missing facts do not mean no recovery is running.
+- **Company navigation has a known host issue.** After switching companies and using browser Back, the host's company selector can disagree with the route. Tested plugin company-isolation guards remain intact; they do not fix the host selector.
+
+The plugin retains its streaming hooks and conditional recovery/watchdog support when the host supplies the necessary facts. These are documented host limitations, not features removed for this release or a claim of full host-feature compatibility.
 
 ## Troubleshooting
 
-- If the sidebar shows a bordered placeholder instead of the `Focus` entry, upgrade to Paperclip `2026.525.0` or newer and reinstall this plugin. `0.4.5+` preserves the original Focus sidebar icon and uses the current host invocation scope.
-- `paperclipApiBase` is only needed for approval overlays. Use the Paperclip origin such as `https://HOST` or `http://127.0.0.1:3100`; leaving it empty disables approval overlay reads without disabling Focus.
-- On Windows, `spawn npm ENOENT` during `npx paperclipai plugin install @tomismeta/paperclip-aperture` comes from the Paperclip host installer failing to spawn npm. This package does not spawn npm during install. Make sure the Paperclip process can resolve `npm.cmd`, or upgrade Paperclip once the Windows installer fix is available.
-
-## Napkin Diagram
-
-```text
-+--------------+   +--------------+   +--------------+   +--------------+   +--------------+
-| Arrive       |   | Translate    |   | Judge        |   | Show         |   | Respond      |
-| events       |   | facts        |   | attention    |   | surface      |   | action       |
-+--------------+   +--------------+   +--------------+   +--------------+   +--------------+
-       |                  |                  |                  |                  |
-       +----->            +----->            +----->            +----->            |
-
-tool hooks         explicit facts      does this         what the          operator decision
-from Paperclip     from raw payloads   deserve           operator          carried back
-and agents                             attention now?    actually sees     to the tool
-```
-
-## What You Get
-
-- a Focus surface inside Paperclip
-- ranked `now`, `next`, and `ambient` attention lanes
-- embedded explainability in the Focus UI, including `Why now`, `Why next`, confidence, signals, thread context, and related activity
-- bounded focus hold while the operator is actively working the current `now` item, so `Show context` and inline commenting do not immediately lose the thread beneath them
-- approval handling, including budget-specific approval semantics
-- issue-aware operator language such as `review required`, `blocked`, and targeted recommended moves
-- agent-aware routing that distinguishes known company agents from human/operator roles when issue text references them
-- a plugin-local semantic mapping and policy layer that interprets Paperclip issue, approval, and agent signals before composing the final Focus view
-- richer semantic continuity hints on mapped issue events, including `supersedes` and `resolves` relationships where Paperclip-specific intent is clear
-- document-aware review interpretation for memo/spec-backed issues so Focus can tell the difference between `review is blocked on the artifact` and `the artifact is attached, monitor instead`
-- Paperclip watchdog awareness that preserves watchdog metadata and promotes only pending watchdog triggers into higher-salience Focus evidence
-- dynamic re-stacking so items can move between `now`, `next`, and `ambient` as new evidence arrives
-- inline issue commenting from the Focus surface when a Paperclip issue supports written response
-- durable acknowledge/suppression behavior backed by plugin state and ledger replay
-- worker-owned display composition that merges live Paperclip approvals into the final Focus snapshot before the UI sees it
-- bounded Core trace export and sparse Focus action telemetry/activity writes for replay and debugging
-- live Core diagnostics export, including signal summaries, memory profile snapshots, and current-session attention state for offline analysis
-- worker-bridged operator signals for Focus page presence, active-item viewing, and context expansion so Aperture Core sees real interaction evidence instead of the plugin faking a second attention model
-- overlay diagnostics export that compares `core -> reconciled -> display` so the plugin's host-policy contribution is inspectable without confusing it for Core judgment
-- a sidebar entry, page, and dashboard widget
-- worker-side host read caching for issue/comment/document/agent reconciliation, with fresh summary/export reads when you need the latest host truth
-- bounded per-company Core sessions with health reporting so the worker does not grow without limit during normal multi-company use
-- replayable operator signal entries and overlay-response ledger entries so Focus actions remain auditable even when a frame came from the display adapter rather than Core
-- decision-owner metadata on reconciled/display frames so exports can distinguish Core judgment, Paperclip reconciliation, approval overlays, and final display promotion
-- a corpus-backed `issue-intelligence` regression check in CI so heuristic edits stay inspectable
-- rollback-safe local mutations that restore the last durable attention state if persistence fails
-- versioned persisted attention envelopes with an explicit migration path for older schemas
-
-## Explainability
-
-Focus is meant to be more legible than a smart inbox.
-
-The current `0.4.x` explainability slice keeps reasoning attached to the cards you are already acting on:
-
-- `Why now` on the active card explains why the current item outranks the rest of the queue
-- `Why next` on queued rows explains why something is staged behind the current top item
-- `Confidence` shows how strong the semantic signal is when the plugin has one
-- `Signals` surfaces the specific factors that pushed the item into attention
-- `Thread context` and `Related activity` help explain whether an item is part of a broader episode or continuation
-
-The intent is not to expose every internal scoring detail. It is to help an operator answer:
-
-- why did this surface?
-- why is it in this lane?
-- how much should I trust this judgment?
-
-## Package Boundary
-
-This plugin treats Paperclip as the host runtime and UI shell, while embedding [Aperture Core](https://github.com/tomismeta/aperture/tree/main/packages/core) through the npm package [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core).
-
-It is an SDK-first integration with explicit plugin-side host policy. Aperture Core handles continuity, replay, and global attention mechanics; the plugin adds Paperclip-specific candidate generation, approval overlays, and operator language where the host can know more than Core alone.
-
-For `0.5.x`, the boundary works like this:
-
-- the plugin worker owns Aperture ingestion, replay, review state, display composition, reconciliation caching, and Paperclip-native policy overlays
-- the final Focus view is therefore Core-backed but not Core-only today: the plugin still owns some Paperclip-specific candidate and lane policy where the host has facts Core cannot infer by itself
-- Paperclip remains the system of record for issue and approval writes
-- approval transport now goes through a worker-side Paperclip adapter using the plugin SDK HTTP client, so the browser UI no longer talks to host approval APIs directly
-- the plugin preserves Paperclip source facts as `SourceEvent`s where the Core contract supports them, while still exporting the normalized `ApertureEvent` used for replay/debug
-- that semantic layer includes reusable intent detectors, actor resolution against real company agents, downstream blocker extraction, explicit rule ids for matched issue heuristics, and shared operator-language generation inside the plugin
-- typed Paperclip issue blocker relations and watchdog summaries are preserved as Focus context/provenance/metadata so Aperture has better dependency facts without the plugin inventing dependency routing
-- `activity.logged` document events invalidate stale reconciled state so document-backed review blockers refresh promptly without a full browser-side merge layer
-- Paperclip `agent.error_cleared` events invalidate reconciled agent state, and redacted deleted comments are ignored when Focus chooses the latest operator signal
-- native Paperclip issue document and relation events invalidate reconciled state directly, with `activity.logged` retained as a compatibility fallback
-- document-scoped issue comments remain contextual status updates rather than being treated as top-level follow-up requests
-- validated Paperclip run diagnostics can become Core 0.9 `SourceEvidence`; arbitrary prose and malformed evidence are ignored
-- subscribed event callbacks stay memory-only and flush pending Aperture state from the next scoped data/action bridge call, keeping host invocation scope boundaries intact without losing replay durability after Focus refreshes
-- Focus exports the live Core snapshot, the reconciled/plugin-composed display snapshot, and bounded Core traces so replay/debug flows can inspect both the engine substrate and the final operator view
-- Aperture Core `0.9.x` semantic and judgment hardening is consumed through this existing `ApertureCore` integration; the plugin does not run the Core `./kernel` subpath as a second runtime judgment system
-
-The plugin requires Paperclip `2026.525.0` or newer and has been validated against the published [`@tomismeta/aperture-core@0.9.0`](https://www.npmjs.com/package/@tomismeta/aperture-core/v/0.9.0) artifact and [`@paperclipai/plugin-sdk@2026.722.0`](https://www.npmjs.com/package/@paperclipai/plugin-sdk/v/2026.722.0). The plugin resolves configuration per Paperclip company so settings do not bleed across company contexts.
-
-Paperclip `2026.722.0` has an upstream installer issue where the running server may report host version `0.0.0` during plugin minimum-version validation. If installation fails with that message, upgrade to a Paperclip server release containing the host-version fix; do not lower the plugin's declared minimum host version.
-
-Approval overlay transport is opt-in until the Paperclip plugin SDK exposes a first-class approval client. Set the plugin config field `paperclipApiBase` when the worker can reach the host approval API; leave it empty to run Focus without approval overlays in hosted or restricted-network environments.
+- **Placeholder instead of Focus:** check the host's API baseline and the plugin's status, then refresh the UI. A matching version number alone does not establish full runtime compatibility.
+- **Approval or comment permission errors:** use a host-authenticated human with access to the intended company. Adding a legacy API-base setting does not bypass native authorization.
+- **Host version reported as `0.0.0`:** older Paperclip installers can misreport their version. Upgrade to a server release containing the host-version fix; do not lower the plugin's minimum version.
+- **Windows `spawn npm ENOENT`:** the Paperclip installer cannot resolve npm. Ensure the host process can find `npm.cmd`, or use a Paperclip release with the installer fix. This plugin does not spawn npm during installation.
 
 ## Development
+
+Use Node.js `>=24.11.0` and pnpm 10. CI uses Node.js `24.21.0`.
 
 ```bash
 pnpm install
 pnpm verify
 ```
 
-Before releasing, run:
+`pnpm verify` runs typecheck, tests, the issue-intelligence corpus, a production build, and bundle-size checks. Before packaging a release, run:
 
 ```bash
-pnpm clean
 pnpm release:check
 ```
 
-`pnpm verify` runs typecheck, tests, the issue-intelligence eval corpus, a production build, and bundle-size checks.
-
-For a live local Paperclip smoke test, start Paperclip first:
-
-```bash
-pnpm build
-npx paperclipai run -i default
-```
-
-Then, in a second terminal:
-
-```bash
-npx paperclipai context set --api-base http://localhost:3100
-npx paperclipai plugin uninstall tomismeta.paperclip-aperture --force
-npx paperclipai plugin install --local .
-```
-
-If you want to smoke test approval overlays locally, set the plugin config field `paperclipApiBase` to `http://127.0.0.1:3100` before creating approval fixtures. Without that config, Focus intentionally skips approval API reads and stays quiet.
-
-Then open `http://127.0.0.1:3100/APE/aperture` and verify:
-
-- `Acknowledge` hides the active card and survives refresh
-- `Next` promotes into `Now`
-- issue comments post successfully from Focus
-- approval actions update Focus correctly when `paperclipApiBase` is configured
-- resolved blocker comments downgrade stale `Now` items
-- attached issue documents downgrade stale `share the memo/spec` review blockers into monitor-only follow-up
-- deleted issue comments do not displace the latest visible operator signal
-- clearing an agent error removes stale agent-error focus cards
-- the active card exposes `Why now`
-- expanded queued rows expose `Why next`
+Use disposable host instances for native testing, not your normal Paperclip data. For registry-install tests, isolate the host process's `HOME` as well as `PAPERCLIP_HOME`: this host stores downloaded plugins in `$HOME/.paperclip/plugins`, independently of `--data-dir`. Do not force-uninstall an existing user installation to prepare a test.
 
 ## Links
 
-- Plugin on npm: [`@tomismeta/paperclip-aperture`](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
-- Roadmap and releasing: [docs/ROADMAP.md](./docs/ROADMAP.md)
-- Architecture remediation note: [docs/AUDIT-REMEDIATION-2026-04.md](./docs/AUDIT-REMEDIATION-2026-04.md)
-- May 2026 audit remediation note: [docs/AUDIT-REMEDIATION-2026-05.md](./docs/AUDIT-REMEDIATION-2026-05.md)
-- Contribution guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
-- Aperture GitHub repo: [tomismeta/aperture](https://github.com/tomismeta/aperture)
-- Aperture Core on npm: [`@tomismeta/aperture-core`](https://www.npmjs.com/package/@tomismeta/aperture-core)
-- Paperclip GitHub repo: [paperclipai/paperclip](https://github.com/paperclipai/paperclip)
+- [Paperclip Aperture on npm](https://www.npmjs.com/package/@tomismeta/paperclip-aperture)
+- [Source repository](https://github.com/tomismeta/paperclip-aperture)
+- [Contribution guide](https://github.com/tomismeta/paperclip-aperture/blob/main/CONTRIBUTING.md)
+- [Aperture](https://github.com/tomismeta/aperture) · [Aperture Core on npm](https://www.npmjs.com/package/@tomismeta/aperture-core)
+- [Paperclip](https://github.com/paperclipai/paperclip)

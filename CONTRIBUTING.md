@@ -27,27 +27,32 @@ pnpm clean
 
 ## Live Paperclip Smoke Test
 
-Build the plugin:
+Use a disposable Paperclip installation, never your default instance:
 
-```bash
-pnpm build
-```
+1. Run `pnpm release:check`, then pack the checked build with
+   `pnpm --config.ignore-scripts=true pack --pack-destination <temporary-directory>`.
+   Install that exact archive into a fresh consumer directory; do not point a
+   release smoke test at the mutable source checkout.
+2. Start official Paperclip `2026.1023.0` with fresh, isolated `HOME` and
+   `PAPERCLIP_HOME` directories and a free loopback port. Use authenticated/private
+   mode for identity and authorization checks.
+3. Bootstrap a disposable owner and authorize the CLI against that instance.
+   Pass its explicit `--data-dir` and `--api-base` to plugin commands; do not
+   change global CLI context.
+4. Install with `plugin install --local <installed-consumer-package-directory>`.
+   A fresh instance does not require uninstalling anything. Never use `--force`
+   to prepare a smoke test or upgrade an installation whose history must survive.
+5. Open Focus through the disposable company's actual sidebar/URL prefix.
+   Exercise native attention, actions, company isolation, polling, and restart
+   persistence. Record unexercised branches and known host limitations.
 
-Run Paperclip in one terminal:
+Use a separate disposable installation for migration from the published baseline.
+Preserve plugin identity, configuration, and persisted state across the no-force
+package switch. Never start an older worker against schema-5 state.
 
-```bash
-npx paperclipai run -i default
-```
-
-Install the local plugin in another:
-
-```bash
-npx paperclipai context set --api-base http://localhost:3100
-npx paperclipai plugin uninstall tomismeta.paperclip-aperture --force
-npx paperclipai plugin install --local .
-```
-
-Then open `http://127.0.0.1:3100/APE/aperture`.
+See the [release checklist](docs/ROADMAP.md#release-checklist) and
+[0.6.0 upgrade safety](docs/RELEASE-0.6.0.md#upgrade-safety). Stop only the services
+and browser sessions created for the smoke test.
 
 ## Architecture Boundaries
 

@@ -68,6 +68,8 @@ export function buildOverlayDiagnostics(input: {
   snapshot: AttentionSnapshot;
   reconciledSnapshot: AttentionSnapshot;
   displaySnapshot: AttentionSnapshot;
+  approvalSyncError?: string;
+  reconciliationSyncError?: string;
 }): AttentionOverlayDiagnostics {
   const coreFrames = snapshotFrameMap(input.snapshot);
   const reconciledFrames = snapshotFrameMap(input.reconciledSnapshot);
@@ -142,6 +144,8 @@ export function buildOverlayDiagnostics(input: {
 
   return {
     generatedAt: input.displaySnapshot.updatedAt,
+    ...(input.approvalSyncError !== undefined ? { approvalSyncError: input.approvalSyncError } : {}),
+    ...(input.reconciliationSyncError !== undefined ? { reconciliationSyncError: input.reconciliationSyncError } : {}),
     summary,
     frames,
   };

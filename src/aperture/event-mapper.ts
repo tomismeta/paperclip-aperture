@@ -5,6 +5,8 @@ import {
   semanticHintsForTruncatedSourceEvidence,
 } from "@tomismeta/aperture-core/semantic";
 import { createInteractionId, createTaskId } from "./task-ref.js";
+import { parsePaperclipRunMetadata } from "./contracts.js";
+import { runAttentionRelationTarget } from "./run-lifecycle.js";
 import {
   approvalBlockingSummary,
   approvalBlockingWhyNow,
@@ -168,6 +170,7 @@ function runFailureSummary(payload: unknown): string {
   const summary = readPayloadString(payload, "summary")
     ?? readPayloadString(payload, "stderr")
     ?? readPayloadString(payload, "failureReason")
+    ?? readPayloadString(payload, "error")
     ?? runFailedSummary();
 
   return hasTruncationFact(payload)
@@ -194,6 +197,28 @@ function sourceMetadata(event: MappablePluginEvent): Record<string, unknown> {
     metadata.paperclipCommentScope = "document";
   }
 
+  if (event.eventType.startsWith("agent.run.")) {
+    const hostStatus = readPayloadString(event.payload, "status");
+    const transition = event.eventType.slice("agent.run.".length);
+    metadata.paperclipRun = parsePaperclipRunMetadata({
+      runId: runIdForEvent(event),
+      agentId: readPayloadString(event.payload, "agentId")
+        ?? (event.entityType === "agent" ? event.entityId : undefined),
+      issueId: readPayloadString(event.payload, "issueId"),
+      status: transition === "started" ? "running"
+        : transition === "finished" ? "completed"
+          : transition === "cancelled" ? "cancelled" : "failed",
+      hostStatus: hostStatus ?? transition,
+      errorCode: readPayloadString(event.payload, "errorCode"),
+      startedAt: readPayloadString(event.payload, "startedAt"),
+      finishedAt: readPayloadString(event.payload, "finishedAt"),
+    });
+  }
+  const issueStatus = readPayloadString(event.payload, "status");
+  if (event.eventType === "issue.updated" && (issueStatus === "done" || issueStatus === "cancelled")) {
+    metadata.paperclipIssueStatus = issueStatus;
+  }
+
   const evidence = sourceEvidenceForRunFailure(event.payload);
   if (event.eventType === "agent.run.failed" && evidence) {
     metadata.sourceEvidenceKind = evidence.kind;
@@ -212,13 +237,9 @@ function makeTaskId(event: MappablePluginEvent): string {
   return createTaskId(entityType, entityId);
 }
 
-function relatedIssueTaskId(payload: unknown): string | null {
-  const issueId =
-    readPayloadString(payload, "issueId")
-    ?? readPayloadString(payload, "sourceIssueId")
-    ?? readPayloadString(payload, "parentIssueId")
-    ?? readStringArray(payload, "issueIds")?.[0];
-  return issueId ? createTaskId("issue", issueId) : null;
+function runIdForEvent(event: MappablePluginEvent): string | undefined {
+  return readPayloadString(event.payload, "runId")
+    ?? ((event.entityType === "heartbeat_run" || event.entityType === "run") ? readString(event.entityId) : undefined);
 }
 
 function makeSource(event: MappablePluginEvent): SourceRef {
@@ -378,7 +399,7 @@ function pendingApprovalSemanticHints(): SourceEvent["semanticHints"] {
   };
 }
 
-function runFailureSemanticHints(payload: unknown): SourceEvent["semanticHints"] {
+function runFailureSemanticHints(payload: unknown, taskId: string): SourceEvent["semanticHints"] {
   const truncated = hasTruncationFact(payload);
 
   return {
@@ -389,6 +410,7 @@ function runFailureSemanticHints(payload: unknown): SourceEvent["semanticHints"]
       "operator review",
       ...(truncated ? ["source evidence truncated"] : []),
     ],
+    relationHints: [{ kind: "same_issue", target: runAttentionRelationTarget(taskId, readPayloadString(payload, "issueId")) }],
     ...(truncated ? semanticHintsForTruncatedSourceEvidence({ status: "failed" }) : {}),
   };
 }
@@ -398,9 +420,19 @@ function interpretEventSemantic(event: SourceEvent): ApertureEvent["semantic"] {
 }
 
 export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEvent | null {
+  const mapped = mapEvent(event);
+  return mapped ? { ...mapped, metadata: { ...mapped.metadata, ...sourceMetadata(event) } } : null;
+}
+
+function mapEvent(event: MappablePluginEvent): ApertureEvent | null {
   const eventType = event.eventType;
-  const taskId = makeTaskId(event);
-  const source = makeSource(event);
+  const isRun = eventType.startsWith("agent.run.");
+  const runId = isRun ? runIdForEvent(event) : undefined;
+  if (isRun && !runId) return null;
+  const taskId = runId ? createTaskId("run", runId) : makeTaskId(event);
+  const source = isRun
+    ? { id: "paperclip:run", kind: "paperclip", label: "Paperclip run" }
+    : makeSource(event);
 
   switch (eventType) {
     case "approval.created":
@@ -542,6 +574,17 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
     case "issue.updated": {
       const title = issueDisplayTitle(event, "Issue updated");
       const summary = readPayloadString(event.payload, "summary") ?? readPayloadString(event.payload, "description");
+      const rawStatus = readPayloadString(event.payload, "status");
+      if (rawStatus === "done" || rawStatus === "cancelled") {
+        return {
+          id: `${event.eventId}:issue-updated`,
+          type: rawStatus === "done" ? "task.completed" : "task.cancelled",
+          taskId,
+          timestamp: event.occurredAt,
+          source,
+          ...(rawStatus === "done" ? { summary } : { reason: summary }),
+        };
+      }
       const status = inferIssueStatus(event.payload);
       return {
         id: `${event.eventId}:issue-updated`,
@@ -615,14 +658,13 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
 
     case "agent.run.failed":
       {
-        const failureTaskId = relatedIssueTaskId(event.payload) ?? taskId;
         const title = readPayloadString(event.payload, "title") ?? "Agent run failed";
         const summary = runFailureSummary(event.payload);
         const evidence = sourceEvidenceForRunFailure(event.payload);
         return {
         id: `${event.eventId}:run-failed`,
         type: "task.updated",
-        taskId: failureTaskId,
+        taskId,
         timestamp: event.occurredAt,
         source,
         toolFamily: "paperclip",
@@ -634,7 +676,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
         semantic: interpretEventSemantic({
           id: `${event.eventId}:run-failed`,
           type: "task.updated",
-          taskId: failureTaskId,
+          taskId,
           timestamp: event.occurredAt,
           source,
           toolFamily: "paperclip",
@@ -643,7 +685,7 @@ export function mapPluginEventToAperture(event: MappablePluginEvent): ApertureEv
           summary,
           status: "failed",
           ...(evidence ? { evidence } : {}),
-          semanticHints: runFailureSemanticHints(event.payload),
+          semanticHints: runFailureSemanticHints(event.payload, taskId),
         }),
       };
       }
@@ -770,8 +812,13 @@ export function mapPluginEventToSourceEvent(event: MappablePluginEvent): SourceE
   if (!mapped) return null;
 
   const semanticHints = event.eventType === "agent.run.failed"
-    ? runFailureSemanticHints(event.payload)
-    : semanticHintsFromMappedEvent(mapped);
+    ? runFailureSemanticHints(event.payload, mapped.taskId)
+    : {
+        ...semanticHintsFromMappedEvent(mapped),
+        ...(event.eventType.startsWith("agent.run.")
+          ? { relationHints: [{ kind: "same_issue" as const, target: runAttentionRelationTarget(mapped.taskId, readPayloadString(event.payload, "issueId")) }] }
+          : {}),
+      };
 
   const base = {
     id: mapped.id,

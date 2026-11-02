@@ -1,5 +1,6 @@
 import type { AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "./types.js";
-import { withFocusDecisionMetadata } from "./contracts.js";
+import { readFocusMetadata, readPaperclipRunMetadata, readPaperclipRunRecoveryMetadata, withFocusDecisionMetadata } from "./contracts.js";
+import { taskIdMatchesKind } from "./task-ref.js";
 
 export type FrameLane = "now" | "next" | "ambient";
 
@@ -9,6 +10,46 @@ export type StoredFrameCandidate = {
   frame: StoredAttentionFrame;
   lane: FrameLane;
 };
+
+export type DisplayEngagement = {
+  taskId: string;
+  interactionId: string;
+  expiresAt: number;
+};
+
+export function applyDisplayEngagement(
+  snapshot: AttentionSnapshot,
+  engagement: DisplayEngagement,
+  review: AttentionReviewState | null | undefined,
+): AttentionSnapshot {
+  if (Date.now() >= engagement.expiresAt) return snapshot;
+  const matches = (frame: StoredAttentionFrame) => frame.taskId === engagement.taskId
+    && frame.interactionId === engagement.interactionId;
+  if (snapshot.now && matches(snapshot.now)) return snapshot;
+  const held = snapshot.next.find(matches);
+  if (!held) return snapshot;
+  const decision = snapshot.now ? readFocusMetadata(snapshot.now).decision : undefined;
+  // Only ordinary next promotion may yield. Core/reconciliation NOW authority remains intact.
+  if (snapshot.now && !(decision?.owner === "display_merge"
+    && decision.sourcePolicy === "mergeStoredFrames.promoteNextWhenNowEmpty")) return snapshot;
+  const next = [
+    ...(snapshot.now ? [snapshot.now] : []),
+    ...snapshot.next.filter((frame) => !matches(frame)),
+  ];
+  const now = withFocusDecisionMetadata(held, {
+    owner: "display_merge",
+    lane: "now",
+    sourcePolicy: "displayEngagement.holdCurrentNow",
+    promotedFromLane: "next",
+    rationale: ["The operator is engaging this current interaction; ordinary next promotion waits until its focus hold expires."],
+  });
+  return attachReviewState({
+    ...snapshot,
+    now,
+    next,
+    counts: { now: 1, next: next.length, ambient: snapshot.ambient.length, total: 1 + next.length + snapshot.ambient.length },
+  }, review);
+}
 
 type LaneCounts = NonNullable<AttentionSnapshot["review"]>["unread"];
 
@@ -31,6 +72,10 @@ function isAmbientExpired(
   snapshotUpdatedAt: string,
   nowIso: string,
 ): boolean {
+  const run = readPaperclipRunMetadata(frame);
+  const recovery = readPaperclipRunRecoveryMetadata(frame);
+  if (taskIdMatchesKind(frame.taskId, "run") && run?.status === "failed" && run.runId
+    && !run.legacyIdentity && recovery && recovery.successorRunId !== run.runId) return false;
   const updatedAt = parseIsoMillis(frameUpdatedAt(frame, snapshotUpdatedAt));
   const now = parseIsoMillis(nowIso);
   if (updatedAt === null || now === null) return false;
@@ -55,8 +100,11 @@ export function isFrameSuppressed(
   snapshotUpdatedAt: string,
   review: AttentionReviewState | null | undefined,
 ): boolean {
-  const suppressedAt = frameReviewState(review, frame.taskId)?.suppressedAt;
+  const marker = frameReviewState(review, frame.taskId);
+  const suppressedAt = marker?.suppressedAt;
   if (!suppressedAt) return false;
+  if (marker.suppressedInteractionId !== undefined && marker.suppressedInteractionId !== frame.interactionId) return false;
+  if (taskIdMatchesKind(frame.taskId, "run") && readPaperclipRunMetadata(frame)?.status === "failed") return true;
   return frameUpdatedAt(frame, snapshotUpdatedAt).localeCompare(suppressedAt) <= 0;
 }
 

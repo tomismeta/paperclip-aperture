@@ -8,7 +8,7 @@ import {
   isBudgetOverride,
   type FrameLane,
 } from "../aperture/frame-model.js";
-import { readFocusMetadata } from "../aperture/contracts.js";
+import { readFocusMetadata, readPaperclipRunMetadata } from "../aperture/contracts.js";
 import { ATTENTION_CONTEXT_IDS } from "../aperture/attention-context.js";
 import { GENERIC_QUEUED_JUDGMENT, genericJudgmentLine } from "../aperture/attention-language.js";
 import { issueBlocksTargetLine, issueNeedsActionFromLine } from "../aperture/issue-intelligence.js";
@@ -154,9 +154,22 @@ export function itemHref(frame: StoredAttentionFrame, companyPrefix: string | nu
   const entityType = entityTypeFromFrame(frame);
   const entityId = entityIdFromFrame(frame);
   if (!entityType || !entityId || !companyPrefix) return null;
+  if (entityType === "interaction") {
+    const issueId = readFocusMetadata(frame).issueId;
+    return issueId ? `/${companyPrefix}/issues/${encodeURIComponent(issueId)}` : null;
+  }
 
-  const pluralType = entityType === "run" ? "runs"
-    : entityType === "approval" ? "approvals"
+  if (entityType === "run") {
+    const run = readPaperclipRunMetadata(frame);
+    if (!run) return null;
+    if (run.runId && run.agentId && !run.legacyIdentity) {
+      return `/${companyPrefix}/agents/${encodeURIComponent(run.agentId)}/runs/${encodeURIComponent(run.runId)}`;
+    }
+    if (run.issueId) return `/${companyPrefix}/issues/${encodeURIComponent(run.issueId)}`;
+    if (run.agentId) return `/${companyPrefix}/agents/${encodeURIComponent(run.agentId)}`;
+    return null;
+  }
+  const pluralType = entityType === "approval" ? "approvals"
     : entityType === "issue" ? "issues"
     : entityType === "agent" ? "agents"
     : null;
@@ -178,6 +191,8 @@ export function activityHref(frame: StoredAttentionFrame, companyPrefix: string 
 export function primaryLinkLabel(frame: StoredAttentionFrame): string {
   const entityType = entityTypeFromFrame(frame);
   switch (entityType) {
+    case "interaction":
+      return "Open decision in Paperclip";
     case "approval":
       return "Open approval";
     case "issue":
@@ -191,9 +206,15 @@ export function primaryLinkLabel(frame: StoredAttentionFrame): string {
   }
 }
 
-export function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "approval" | "acknowledge" | "none" {
-  if (approvalIdForFrame(frame) && (frame.responseSpec?.kind === "approval" || frame.mode === "approval")) {
-    return "approval";
+export function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "interaction" | "approval" | "acknowledge" | "none" {
+  if (entityTypeFromFrame(frame) === "interaction") {
+    return readFocusMetadata(frame).interactionDecision?.inline ? "interaction" : "none";
+  }
+  if (entityTypeFromFrame(frame) === "run") {
+    return lane !== "ambient" && readPaperclipRunMetadata(frame)?.status === "failed" ? "acknowledge" : "none";
+  }
+  if (frame.responseSpec?.kind === "approval" || frame.mode === "approval") {
+    return approvalIdForFrame(frame) ? "approval" : "none";
   }
 
   if (
@@ -201,7 +222,6 @@ export function responseKind(frame: StoredAttentionFrame, lane: FrameLane): "app
     && (
       frame.responseSpec?.kind === "acknowledge"
       || frame.mode === "status"
-      || frame.responseSpec?.kind === "approval"
     )
   ) {
     return "acknowledge";

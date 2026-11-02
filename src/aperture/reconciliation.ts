@@ -1,6 +1,6 @@
 import type { Agent, Issue, IssueComment, PluginContext, PluginIssuesClient } from "@paperclipai/plugin-sdk";
 import type { SemanticConfidence } from "@tomismeta/aperture-core/semantic";
-import type { AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "./types.js";
+import type { AttentionSnapshot, StoredAttentionFrame } from "./types.js";
 import type { ApertureCompanyStore } from "./core-store.js";
 import {
   agentStatusItem,
@@ -21,7 +21,7 @@ import {
   watchdogItem,
   humanizeToken,
 } from "./attention-context.js";
-import { mergeStoredFrames, type FrameLane, type StoredFrameCandidate } from "./frame-model.js";
+import type { FrameLane, StoredFrameCandidate } from "./frame-model.js";
 import {
   agentAttentionSummary,
   agentAttentionTitle,
@@ -41,7 +41,9 @@ import {
   truncate,
 } from "./issue-intelligence.js";
 import { createInteractionId, createTaskId } from "./task-ref.js";
-import { withFocusDecisionMetadata } from "./contracts.js";
+import { readPaperclipRunMetadata, withFocusDecisionMetadata } from "./contracts.js";
+import { interactionRecordToCandidate } from "./interaction-frames.js";
+import { runRetryCandidate } from "./run-lifecycle.js";
 
 type IssueDocumentSummary = Awaited<ReturnType<PluginIssuesClient["documents"]["list"]>>[number];
 type IssueRelationSummary = Awaited<ReturnType<PluginIssuesClient["relations"]["get"]>>;
@@ -50,7 +52,9 @@ type BlockedInboxAttention = NonNullable<Issue["blockedInboxAttention"]>;
 type ActiveRecoveryAction = NonNullable<Issue["activeRecoveryAction"]>;
 type IssueWatchdogSummary = NonNullable<Issue["watchdog"]>;
 
-const COMMENT_LOOKUP_CONCURRENCY = 6;
+const ISSUE_LOOKUP_CONCURRENCY = 6;
+const HOST_PAGE_SIZE = 100;
+const ISSUE_INTERACTIONS_TTL_MS = 15_000;
 const ISSUE_LIST_TTL_MS = 15_000;
 const ISSUE_COMMENTS_TTL_MS = 15_000;
 const ISSUE_DOCUMENTS_TTL_MS = 15_000;
@@ -633,7 +637,7 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
         label: "Paperclip agent",
       },
       version: 1,
-      mode: "status",
+      mode: agent.status === "pending_approval" ? "approval" : "status",
       tone:
         agent.status === "error"
           ? "critical"
@@ -655,7 +659,7 @@ function agentFrame(agent: Agent): StoredFrameCandidate | null {
           ...(agent.title ? [agentTitleItem(agent.title)] : []),
         ],
       },
-      responseSpec: acknowledgeResponseSpec(),
+      responseSpec: agent.status === "pending_approval" ? { kind: "none" } : acknowledgeResponseSpec(),
       provenance,
       timing: {
         createdAt: toIsoString(agent.createdAt) ?? updatedAt,
@@ -704,14 +708,10 @@ async function cachedRead<T>(
   options: { fresh?: boolean } | undefined,
   loader: () => Promise<T>,
 ): Promise<T> {
-  if (options?.fresh) {
-    const value = await loader();
-    return store.setCachedHostValue(companyId, key, value, ttlMs);
+  if (!options?.fresh) {
+    const cached = store.getCachedHostValue<T>(companyId, key);
+    if (cached !== null) return cached;
   }
-
-  const cached = store.getCachedHostValue<T>(companyId, key);
-  if (cached !== null) return cached;
-
   const hostDataRevision = store.getReconciledRevision(companyId);
   const flightKey = JSON.stringify([hostDataRevision, key]);
   return store.runSingleFlight(companyId, "host-value", flightKey, async () => {
@@ -783,16 +783,44 @@ async function mapWithConcurrency<TInput, TOutput>(
   return results;
 }
 
-async function loadIssuesForStatus(
+async function loadAllPages<T extends { id: string }>(
+  loadPage: (offset: number) => Promise<T[]>,
+): Promise<T[]> {
+  const records: T[] = [];
+  const seenIds = new Set<string>();
+  const seenPages = new Set<string>();
+  let offset = 0;
+  while (true) {
+    const page = await loadPage(offset);
+    if (page.length === 0) return records;
+    const pageIds = JSON.stringify(page.map((record) => record.id));
+    if (seenPages.has(pageIds)) throw new Error("Paperclip pagination did not advance.");
+    seenPages.add(pageIds);
+    for (const record of page) {
+      if (seenIds.has(record.id)) continue;
+      seenIds.add(record.id);
+      records.push(record);
+    }
+    offset += page.length;
+    if (page.length < HOST_PAGE_SIZE) return records;
+  }
+}
+
+async function loadAllIssues(
   ctx: PluginContext,
   store: ApertureCompanyStore,
   companyId: string,
-  status: "blocked" | "in_review",
   options?: { freshHostData?: boolean },
 ): Promise<Issue[]> {
-  return cachedRead(store, companyId, `issues:${status}`, ISSUE_LIST_TTL_MS, { fresh: options?.freshHostData }, async () => (
-    await ctx.issues.list({ companyId, status, includePluginOperations: false, limit: 25 })
-  ));
+  return cachedRead(store, companyId, "issues:all", ISSUE_LIST_TTL_MS, { fresh: options?.freshHostData }, async () => {
+    const issues = await ctx.issues.list({ companyId, includePluginOperations: false });
+    const seenIds = new Set<string>();
+    return issues.filter((issue) => {
+      if (seenIds.has(issue.id)) return false;
+      seenIds.add(issue.id);
+      return true;
+    });
+  });
 }
 
 async function loadAllAgents(
@@ -801,8 +829,8 @@ async function loadAllAgents(
   companyId: string,
   options?: { freshHostData?: boolean },
 ): Promise<Agent[]> {
-  return cachedRead(store, companyId, "agents:all", AGENT_LIST_TTL_MS, { fresh: options?.freshHostData }, async () => (
-    await ctx.agents.list({ companyId, limit: 100 })
+  return cachedRead(store, companyId, "agents:all", AGENT_LIST_TTL_MS, { fresh: options?.freshHostData }, () => (
+    loadAllPages((offset) => ctx.agents.list({ companyId, limit: HOST_PAGE_SIZE, offset }))
   ));
 }
 
@@ -810,19 +838,15 @@ async function loadIssueCandidates(
   ctx: PluginContext,
   store: ApertureCompanyStore,
   companyId: string,
+  issues: Issue[],
+  surfacedInteractionIds: Set<string>,
   allAgents: Agent[],
   options?: { freshHostData?: boolean },
 ): Promise<StoredFrameCandidate[]> {
-  const [blocked, inReview] = await Promise.all([
-    loadIssuesForStatus(ctx, store, companyId, "blocked", options),
-    loadIssuesForStatus(ctx, store, companyId, "in_review", options),
-  ]);
-
-  const issues = [...blocked, ...inReview];
   const [comments, documents, relations] = await Promise.all([
     mapWithConcurrency(
       issues,
-      COMMENT_LOOKUP_CONCURRENCY,
+      ISSUE_LOOKUP_CONCURRENCY,
       (issue) => cachedRead(
         store,
         companyId,
@@ -834,7 +858,7 @@ async function loadIssueCandidates(
     ),
     mapWithConcurrency(
       issues,
-      COMMENT_LOOKUP_CONCURRENCY,
+      ISSUE_LOOKUP_CONCURRENCY,
       (issue) => cachedRead(
         store,
         companyId,
@@ -846,7 +870,7 @@ async function loadIssueCandidates(
     ),
     mapWithConcurrency(
       issues,
-      COMMENT_LOOKUP_CONCURRENCY,
+      ISSUE_LOOKUP_CONCURRENCY,
       (issue) => cachedRead(
         store,
         companyId,
@@ -862,7 +886,19 @@ async function loadIssueCandidates(
   };
 
   return issues
-    .map((issue, index) => issueFrame(issue, comments[index] ?? null, documents[index] ?? [], relations[index] ?? null, directory))
+    .map((issue, index) => {
+      const issueRelations = relations[index] ?? null;
+      const duplicateInteraction = issue.blockedInboxAttention?.interactionId;
+      if (
+        duplicateInteraction
+        && surfacedInteractionIds.has(duplicateInteraction)
+        && !isOpenRecoveryAction(issue.activeRecoveryAction)
+        && !hasPendingWatchdogTrigger(issue.watchdog)
+        && issueRelations !== null
+        && unresolvedBlockers(issueRelations).length === 0
+      ) return null;
+      return issueFrame(issue, comments[index] ?? null, documents[index] ?? [], issueRelations, directory);
+    })
     .filter((candidate): candidate is StoredFrameCandidate => candidate !== null);
 }
 
@@ -878,31 +914,55 @@ export async function loadReconciledCandidates(
   store: ApertureCompanyStore,
   companyId: string,
   config: Record<string, unknown>,
-  options?: { freshHostData?: boolean },
+  options?: { freshHostData?: boolean; snapshot?: AttentionSnapshot },
 ): Promise<StoredFrameCandidate[]> {
-  const allAgents = await loadAllAgents(ctx, store, companyId, options);
-  const issueCandidatesPromise = config.captureIssueLifecycle === false
-    ? Promise.resolve<StoredFrameCandidate[]>([])
-    : loadIssueCandidates(ctx, store, companyId, allAgents, options);
-
-  const agentCandidatesPromise = Promise.resolve(loadAgentCandidates(allAgents));
-
-  const [issueCandidates, agentCandidates] = await Promise.all([
-    issueCandidatesPromise,
-    agentCandidatesPromise,
+  const [listedIssues, allAgents] = await Promise.all([
+    loadAllIssues(ctx, store, companyId, options),
+    loadAllAgents(ctx, store, companyId, options),
   ]);
-
-  return [...issueCandidates, ...agentCandidates];
+  const allIssues = listedIssues.filter((issue) => issue.companyId === companyId);
+  const openIssues = allIssues.filter((issue) => (
+    issue.hiddenAt == null && issue.archivedAt == null
+    && issue.status !== "done" && issue.status !== "cancelled"
+  ));
+  const surfacedInteractionIds = new Set<string>();
+  const interactionGroups = await mapWithConcurrency(openIssues, ISSUE_LOOKUP_CONCURRENCY, async (issue) => {
+    const interactions = await cachedRead(
+      store, companyId, `issue:${issue.id}:interactions`, ISSUE_INTERACTIONS_TTL_MS,
+      { fresh: options?.freshHostData },
+      () => ctx.issues.listInteractions(issue.id, companyId),
+    );
+    const candidates: StoredFrameCandidate[] = [];
+    for (const interaction of interactions) {
+      if (interaction.companyId !== companyId || interaction.issueId !== issue.id) continue;
+      const candidate = interactionRecordToCandidate(issue, interaction);
+      if (!candidate) continue;
+      surfacedInteractionIds.add(interaction.id);
+      candidates.push(candidate);
+    }
+    return candidates;
+  });
+  const aggregateIssues = openIssues.filter((issue) => (
+    issue.status === "blocked" || issue.status === "in_review"
+    || !!issue.blockedInboxAttention || isOpenRecoveryAction(issue.activeRecoveryAction)
+    || hasPendingWatchdogTrigger(issue.watchdog)
+  ));
+  const issueCandidates = config.captureIssueLifecycle === false
+    ? []
+    : await loadIssueCandidates(ctx, store, companyId, aggregateIssues, surfacedInteractionIds, allAgents, options);
+  const retryCandidates: StoredFrameCandidate[] = [];
+  const snapshot = options?.snapshot ?? store.getSnapshot(companyId);
+  if (snapshot?.companyId === companyId) {
+    const issuesById = new Map(allIssues.map((issue) => [issue.id, issue]));
+    const frames = [...(snapshot.now ? [snapshot.now] : []), ...snapshot.next, ...snapshot.ambient];
+    for (const frame of frames) {
+      const issueId = readPaperclipRunMetadata(frame)?.issueId;
+      const issue = issueId ? issuesById.get(issueId) : undefined;
+      if (!issue) continue;
+      const candidate = runRetryCandidate(frame, issue);
+      if (candidate) retryCandidates.push(candidate);
+    }
+  }
+  return [...issueCandidates, ...loadAgentCandidates(allAgents), ...interactionGroups.flat(), ...retryCandidates];
 }
 
-export async function reconcileAttentionSnapshot(
-  ctx: PluginContext,
-  store: ApertureCompanyStore,
-  companyId: string,
-  snapshot: AttentionSnapshot,
-  review: AttentionReviewState | null,
-  config: Record<string, unknown>,
-): Promise<AttentionSnapshot> {
-  const candidates = await loadReconciledCandidates(ctx, store, companyId, config);
-  return mergeStoredFrames(snapshot, companyId, candidates, review);
-}

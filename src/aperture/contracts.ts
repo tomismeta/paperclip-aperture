@@ -1,6 +1,84 @@
 import type { SemanticConfidence, SemanticRelationHint } from "@tomismeta/aperture-core/semantic";
 import type { StoredAttentionFrame } from "./types.js";
 
+export type PaperclipRunMetadata = {
+  runId?: string;
+  agentId?: string;
+  issueId?: string;
+  status?: "running" | "failed" | "completed" | "cancelled";
+  hostStatus?: string;
+  errorCode?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  legacyIdentity?: boolean;
+};
+
+export function parsePaperclipRunMetadata(value: unknown): PaperclipRunMetadata | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const runId = readString(record.runId);
+  const legacyIdentity = record.legacyIdentity === true;
+  if (!runId && !legacyIdentity) return null;
+  const status = record.status;
+  if (status !== undefined && status !== "running" && status !== "failed"
+    && status !== "completed" && status !== "cancelled") return null;
+  const timestamp = (value: unknown): string | undefined => {
+    const text = readString(value);
+    return text && Number.isFinite(Date.parse(text)) ? new Date(text).toISOString() : undefined;
+  };
+  return {
+    ...(runId && !legacyIdentity ? { runId } : {}),
+    ...(legacyIdentity ? { legacyIdentity: true } : {}),
+    agentId: readString(record.agentId),
+    issueId: readString(record.issueId),
+    status,
+    hostStatus: readString(record.hostStatus),
+    errorCode: readString(record.errorCode),
+    startedAt: timestamp(record.startedAt),
+    finishedAt: timestamp(record.finishedAt),
+  };
+}
+
+export function readPaperclipRunMetadata(frame: StoredAttentionFrame): PaperclipRunMetadata | null {
+  return parsePaperclipRunMetadata(asRecord(frame.metadata)?.paperclipRun);
+}
+
+export type PaperclipRunRecoveryMetadata = {
+  successorRunId: string;
+  status: "scheduled_retry" | "queued" | "running";
+  scheduledRetryAt?: string;
+  attempt: number;
+};
+
+export function readPaperclipRunRecoveryMetadata(frame: StoredAttentionFrame): PaperclipRunRecoveryMetadata | null {
+  const value = asRecord(asRecord(frame.metadata)?.paperclipRunRecovery);
+  if (!value) return null;
+  const successorRunId = readString(value.successorRunId);
+  const { status, attempt } = value;
+  if (!successorRunId || (status !== "scheduled_retry" && status !== "queued" && status !== "running")
+    || typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 0) return null;
+  let scheduledRetryAt: string | undefined;
+  if (value.scheduledRetryAt !== undefined) {
+    const timestamp = readString(value.scheduledRetryAt);
+    if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return null;
+    scheduledRetryAt = new Date(timestamp).toISOString();
+  }
+  return { successorRunId, status, attempt, ...(scheduledRetryAt ? { scheduledRetryAt } : {}) };
+}
+
+export type InteractionDecisionMetadata = {
+  inline: boolean;
+  acceptLabel: string;
+  rejectLabel: string;
+  rejectRequiresReason: boolean;
+  allowDeclineReason: boolean;
+  rejectReasonLabel: string;
+  preparing: boolean;
+  addresseeUserId?: string;
+  effectiveResolverPolicy?: "anyone" | "not_creator" | "human_only";
+  createdByUserId?: string;
+};
+
 type AttentionMetadata = {
   rationale?: string[];
 };
@@ -29,6 +107,10 @@ export type FocusDecisionMetadata = {
 
 export type FocusFrameMetadata = {
   entityType?: string;
+  issueId?: string;
+  paperclipInteractionId?: string;
+  interactionKind?: string;
+  interactionDecision?: InteractionDecisionMetadata;
   issueStatus?: string;
   issuePriority?: string;
   approvalStatus?: string;
@@ -84,6 +166,30 @@ function readRelationHints(value: unknown): SemanticRelationHint[] | undefined {
   return hints.length > 0 ? hints : undefined;
 }
 
+function readInteractionDecision(value: unknown): InteractionDecisionMetadata | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const policy = record.effectiveResolverPolicy;
+  const effectiveResolverPolicy = policy === "anyone" || policy === "not_creator" || policy === "human_only"
+    ? policy : undefined;
+  const validBooleans = ["inline", "rejectRequiresReason", "allowDeclineReason", "preparing"]
+    .every((key) => typeof record[key] === "boolean");
+  const validIdentities = ["addresseeUserId", "createdByUserId"]
+    .every((key) => record[key] === undefined || readString(record[key]) !== undefined);
+  return {
+    inline: record.inline === true && validBooleans && validIdentities && effectiveResolverPolicy !== undefined,
+    acceptLabel: readString(record.acceptLabel) ?? "Confirm",
+    rejectLabel: readString(record.rejectLabel) ?? "Decline",
+    rejectRequiresReason: record.rejectRequiresReason === true,
+    allowDeclineReason: record.allowDeclineReason === true,
+    rejectReasonLabel: readString(record.rejectReasonLabel) ?? "Reason",
+    preparing: record.preparing === true,
+    addresseeUserId: readString(record.addresseeUserId),
+    effectiveResolverPolicy,
+    createdByUserId: readString(record.createdByUserId),
+  };
+}
+
 export function readFocusMetadata(frame: StoredAttentionFrame): FocusFrameMetadata {
   const metadata = asRecord(frame.metadata);
   const attention = asRecord(metadata?.attention);
@@ -94,6 +200,10 @@ export function readFocusMetadata(frame: StoredAttentionFrame): FocusFrameMetada
 
   return {
     entityType: readString(metadata?.entityType),
+    issueId: readString(metadata?.issueId),
+    paperclipInteractionId: readString(metadata?.paperclipInteractionId),
+    interactionKind: readString(metadata?.interactionKind),
+    interactionDecision: readInteractionDecision(metadata?.interactionDecision),
     issueStatus: readString(metadata?.issueStatus),
     issuePriority: readString(metadata?.issuePriority),
     approvalStatus: readString(metadata?.approvalStatus),

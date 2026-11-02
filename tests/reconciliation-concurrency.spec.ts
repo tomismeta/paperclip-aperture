@@ -22,7 +22,7 @@ function deferred<T>() {
 }
 
 function createContext(options: {
-  listAgents: (params: { companyId: string; limit: number }) => Promise<Agent[]>;
+  listAgents: (params: { companyId: string; limit: number; offset: number }) => Promise<Agent[]>;
   getConfig?: (companyId: string) => Promise<Record<string, unknown>>;
 }) {
   const handlers = new Map<string, DataHandler>();
@@ -31,6 +31,7 @@ function createContext(options: {
     agents: {
       list: listAgents,
     },
+    approvals: { list: vi.fn(async () => []) },
     config: {
       get: vi.fn(options.getConfig ?? (async () => ({ captureIssueLifecycle: false }))),
     },
@@ -41,6 +42,7 @@ function createContext(options: {
     },
     issues: {
       list: vi.fn(async () => []),
+      listInteractions: vi.fn(async () => []),
       listComments: vi.fn(async () => []),
       documents: { list: vi.fn(async () => []) },
       relations: { get: vi.fn(async () => null) },
@@ -87,7 +89,7 @@ describe("reconciliation concurrency", () => {
 
     expect(callsBeforeRelease).toBe(2);
     expect(harness.listAgents).toHaveBeenCalledTimes(2);
-    expect(cacheWrites).toHaveBeenCalledTimes(2);
+    expect(cacheWrites.mock.calls.filter(([, key]) => key === "agents:all")).toHaveLength(2);
   });
 
   it("coalesces eight display reconciliations after the same cache miss", async () => {

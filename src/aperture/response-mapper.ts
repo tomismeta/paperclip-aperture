@@ -3,7 +3,7 @@ import type { AttentionResponse } from "@tomismeta/aperture-core";
 export type FrameDecision = {
   taskId: string;
   interactionId: string;
-  action: "acknowledge" | "dismiss" | "approve" | "reject" | "request-revision";
+  action: "acknowledge" | "dismiss" | "approve" | "reject";
 };
 
 export function mapDecisionToResponse(decision: FrameDecision): AttentionResponse {
@@ -17,8 +17,6 @@ export function mapDecisionToResponse(decision: FrameDecision): AttentionRespons
           ? { kind: "approved" }
           : decision.action === "reject"
             ? { kind: "rejected" }
-            : decision.action === "request-revision"
-              ? { kind: "rejected", reason: "revision requested" }
-              : { kind: "acknowledged" },
+            : { kind: "acknowledged" },
   };
 }
