@@ -4,7 +4,7 @@ import { mergeSnapshotWithApprovals, type ApprovalRecord } from "../aperture/app
 import { FOCUS_SURFACE_CAPABILITIES } from "../aperture/core-capabilities.js";
 import { loadReconciledCandidates } from "../aperture/reconciliation.js";
 import { buildOverlayDiagnostics } from "../aperture/overlay-diagnostics.js";
-import { applyDisplayEngagement, mergeStoredFrames, type DisplayEngagement, type StoredFrameCandidate } from "../aperture/frame-model.js";
+import { applyDisplayEngagement, mergeStoredFrames, rankForViewer, type DisplayEngagement, type StoredFrameCandidate } from "../aperture/frame-model.js";
 import { readFocusMetadata, readPaperclipRunRecoveryMetadata } from "../aperture/contracts.js";
 import { parseTaskId, taskIdMatchesKind } from "../aperture/task-ref.js";
 import {
@@ -89,6 +89,11 @@ function emptyCoreDiagnostics(exportedAt: string): AttentionCoreDiagnostics {
     },
     currentNowTask: null,
   };
+}
+
+export function readViewerUserId(params: Record<string, unknown>): string | null {
+  const value = params.viewerUserId;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
 function boundedPositiveInt(
@@ -310,7 +315,7 @@ export async function loadDisplaySnapshot(
   companyId: string,
   snapshot: AttentionSnapshot,
   reviewState: AttentionReviewState,
-  options: { freshHostData?: boolean } = {},
+  options: { freshHostData?: boolean; viewerUserId?: string | null } = {},
 ): Promise<{
   reconciledSnapshot: AttentionSnapshot;
   displaySnapshot: AttentionSnapshot;
@@ -318,15 +323,20 @@ export async function loadDisplaySnapshot(
   reconciliationSyncError?: string;
   canEngage: (engagement: DisplayEngagement) => boolean;
 }> {
+  const { viewerUserId, ...reconciliationOptions } = options;
   const reconciliation = await loadReconciledAttentionSnapshot(
-    ctx, store, companyId, snapshot, reviewState, { preferCache: true, ...options },
+    ctx, store, companyId, snapshot, reviewState, { preferCache: true, ...reconciliationOptions },
   );
   const revision = store.getReconciledRevision(companyId);
   const { error: approvalSyncError } = await loadWorkerApprovals(ctx, store, companyId);
   const composeLatest = (engagement: DisplayEngagement | null) => {
     const reconciledSnapshot = reconciliation.composeLatest();
     const currentReview = store.getReview(companyId) ?? reviewState;
-    const baseline = mergeSnapshotWithApprovals(reconciledSnapshot, companyId, store.getApprovals(companyId), currentReview);
+    const baseline = rankForViewer(
+      mergeSnapshotWithApprovals(reconciledSnapshot, companyId, store.getApprovals(companyId), currentReview),
+      viewerUserId,
+      currentReview,
+    );
     let displaySnapshot = baseline;
     let engagementValid = false;
     if (engagement) {
@@ -403,13 +413,15 @@ export function registerDataHandlers(ctx: PluginContext, store: ApertureCompanyS
     const { snapshot: reconciledSnapshot } = await loadReconciledAttentionSnapshot(ctx, store, companyId, snapshot, reviewState, {
       freshHostData: true,
     });
-    return reconciledSnapshot;
+    return rankForViewer(reconciledSnapshot, readViewerUserId(params), store.getReview(companyId) ?? reviewState);
   });
 
   ctx.data.register("attention-display", async (params) => {
     const companyId = requireCompanyId(params);
     const { snapshot, reviewState } = await ensureAttentionState(ctx, store, companyId);
-    const { displaySnapshot, approvalSyncError, reconciliationSyncError } = await loadDisplaySnapshot(ctx, store, companyId, snapshot, reviewState);
+    const { displaySnapshot, approvalSyncError, reconciliationSyncError } = await loadDisplaySnapshot(ctx, store, companyId, snapshot, reviewState, {
+      viewerUserId: readViewerUserId(params),
+    });
 
     return {
       companyId,

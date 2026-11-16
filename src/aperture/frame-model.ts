@@ -28,10 +28,8 @@ export function applyDisplayEngagement(
   if (snapshot.now && matches(snapshot.now)) return snapshot;
   const held = snapshot.next.find(matches);
   if (!held) return snapshot;
-  const decision = snapshot.now ? readFocusMetadata(snapshot.now).decision : undefined;
   // Only ordinary next promotion may yield. Core/reconciliation NOW authority remains intact.
-  if (snapshot.now && !(decision?.owner === "display_merge"
-    && decision.sourcePolicy === "mergeStoredFrames.promoteNextWhenNowEmpty")) return snapshot;
+  if (snapshot.now && !isDisplayPromotedNow(snapshot.now)) return snapshot;
   const next = [
     ...(snapshot.now ? [snapshot.now] : []),
     ...snapshot.next.filter((frame) => !matches(frame)),
@@ -52,6 +50,83 @@ export function applyDisplayEngagement(
 }
 
 type LaneCounts = NonNullable<AttentionSnapshot["review"]>["unread"];
+
+const DISPLAY_PROMOTION_POLICIES = new Set([
+  "mergeStoredFrames.promoteNextWhenNowEmpty",
+  "viewerPriority.promoteHumanAction",
+]);
+
+function isDisplayPromotedNow(frame: StoredAttentionFrame): boolean {
+  const decision = readFocusMetadata(frame).decision;
+  return decision?.owner === "display_merge" && DISPLAY_PROMOTION_POLICIES.has(decision.sourcePolicy ?? "");
+}
+
+function readMetadataString(frame: StoredAttentionFrame, key: string): string | undefined {
+  const metadata = frame.metadata as Record<string, unknown> | undefined;
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+export function needsHumanAction(frame: StoredAttentionFrame, viewerUserId?: string | null): boolean {
+  const viewer = viewerUserId?.trim() || null;
+  if (frame.mode === "approval") return true;
+  const metadata = readFocusMetadata(frame);
+  if (metadata.entityType === "interaction" && frame.mode === "choice") {
+    const decision = metadata.interactionDecision;
+    if (!viewer || !decision) return true;
+    if (decision.addresseeUserId && decision.addresseeUserId !== viewer) return false;
+    return !(decision.effectiveResolverPolicy === "not_creator" && decision.createdByUserId === viewer);
+  }
+  if (metadata.entityType === "issue") {
+    const assigneeUserId = readMetadataString(frame, "issueAssigneeUserId");
+    return assigneeUserId !== undefined && (!viewer || assigneeUserId === viewer);
+  }
+  return false;
+}
+
+export function rankForViewer(
+  snapshot: AttentionSnapshot,
+  viewerUserId: string | null | undefined,
+  review: AttentionReviewState | null | undefined,
+): AttentionSnapshot {
+  const ranked = [
+    ...snapshot.next.filter((frame) => needsHumanAction(frame, viewerUserId)),
+    ...snapshot.next.filter((frame) => !needsHumanAction(frame, viewerUserId)),
+  ];
+  const current = snapshot.now;
+  const head = ranked[0];
+  const yieldsNow = current !== null && head !== undefined
+    && isDisplayPromotedNow(current)
+    && current.tone !== "critical"
+    && !needsHumanAction(current, viewerUserId)
+    && needsHumanAction(head, viewerUserId);
+  if (!yieldsNow) {
+    if (ranked.every((frame, index) => frame === snapshot.next[index])) return snapshot;
+    return { ...snapshot, next: ranked };
+  }
+  const rest = ranked.slice(1);
+  const humanCount = rest.filter((frame) => needsHumanAction(frame, viewerUserId)).length;
+  const yielded = withFocusDecisionMetadata(current, {
+    owner: "display_merge",
+    lane: "next",
+    sourcePolicy: "viewerPriority.yieldToHumanAction",
+    rationale: ["A frame that needs a human action took the focus from this status frame."],
+  });
+  const now = withFocusDecisionMetadata(head, {
+    owner: "display_merge",
+    lane: "now",
+    sourcePolicy: "viewerPriority.promoteHumanAction",
+    promotedFromLane: "next",
+    rationale: ["A frame that needs a human action ranks above a promoted status frame."],
+  });
+  const next = [...rest.slice(0, humanCount), yielded, ...rest.slice(humanCount)];
+  return attachReviewState({
+    ...snapshot,
+    now,
+    next,
+    counts: { now: 1, next: next.length, ambient: snapshot.ambient.length, total: 1 + next.length + snapshot.ambient.length },
+  }, review);
+}
 
 export function isBudgetOverride(frame: StoredAttentionFrame): boolean {
   return frame.provenance?.factors?.includes("budget stop") ?? false;

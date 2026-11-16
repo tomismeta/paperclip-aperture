@@ -199,20 +199,20 @@ function blockedInboxConsequence(attention: BlockedInboxAttention): "low" | "med
   return "low";
 }
 
-function issueConsequence(issue: Issue, lane: FrameLane): "low" | "medium" | "high" {
+function issueConsequence(issue: Issue, lane: FrameLane, evidence: IssueFrameEvidence): "low" | "medium" | "high" {
   if (issue.blockedInboxAttention) return blockedInboxConsequence(issue.blockedInboxAttention);
   if (issue.activeRecoveryAction?.status === "escalated") return "high";
   if (issue.activeRecoveryAction?.status === "active" && issue.priority === "critical") return "high";
   if (hasPendingWatchdogTrigger(issue.watchdog)) return priorityConsequence(issue);
-  if (issue.status === "blocked") return priorityConsequence(issue);
+  if (issue.status === "blocked" && !evidence.waitsOnAgents) return priorityConsequence(issue);
   return lane === "ambient" ? "low" : "medium";
 }
 
-function issueTone(issue: Issue, lane: FrameLane): StoredAttentionFrame["tone"] {
+function issueTone(issue: Issue, lane: FrameLane, evidence: IssueFrameEvidence): StoredAttentionFrame["tone"] {
   if (issue.blockedInboxAttention?.severity === "critical") return "critical";
   if (issue.activeRecoveryAction?.status === "escalated") return "critical";
   if (hasPendingWatchdogTrigger(issue.watchdog)) return issue.priority === "critical" ? "critical" : "focused";
-  if (issue.status === "blocked") return "focused";
+  if (issue.status === "blocked" && !evidence.waitsOnAgents) return "focused";
   return lane === "ambient" ? "ambient" : "focused";
 }
 
@@ -335,6 +335,7 @@ type IssueFrameEvidence = {
   analysis: IssueIntentAnalysis;
   documentSignal: IssueDocumentSignal;
   relations: IssueRelationSummary | null;
+  waitsOnAgents: boolean;
 };
 
 function latestComment(comments: IssueComment[]): LatestComment {
@@ -385,10 +386,11 @@ function issueLane(issue: Issue, comment: LatestComment, evidence: IssueFrameEvi
     return comment || issue.isUnreadForMe || evidence.documentSignal.hasDocuments ? "ambient" : null;
   }
   if (issue.status === "blocked") {
-    if (issue.workMode === "planning") return "ambient";
+    if (issue.workMode === "planning" || evidence.waitsOnAgents) return "ambient";
     return issue.priority === "critical" ? "now" : "next";
   }
   if (issue.status === "in_review") return "next";
+  if (isAssignedUserWork(issue)) return "next";
   if (comment || issue.isUnreadForMe) return "ambient";
   return null;
 }
@@ -399,6 +401,25 @@ function isResolvedRelationIssue(issue: IssueRelationIssueSummary): boolean {
 
 function unresolvedBlockers(relations: IssueRelationSummary | null): IssueRelationIssueSummary[] {
   return relations?.blockedBy.filter((issue) => !isResolvedRelationIssue(issue)) ?? [];
+}
+
+function isAgentAssigned(issue: Pick<IssueRelationIssueSummary, "assigneeAgentId" | "assigneeUserId">): boolean {
+  return !!issue.assigneeAgentId && !issue.assigneeUserId;
+}
+
+export function waitsOnlyOnAgents(
+  issue: Pick<Issue, "status" | "unblockDescriptor">,
+  relations: IssueRelationSummary | null,
+): boolean {
+  if (issue.status !== "blocked") return false;
+  const owner = issue.unblockDescriptor?.owner;
+  if (owner != null) return typeof owner === "object" && "agentId" in owner && !!owner.agentId;
+  const blockers = unresolvedBlockers(relations);
+  return blockers.length > 0 && blockers.every(isAgentAssigned);
+}
+
+export function isAssignedUserWork(issue: Pick<Issue, "status" | "assigneeUserId">): boolean {
+  return !!issue.assigneeUserId && (issue.status === "todo" || issue.status === "in_progress");
 }
 
 function primaryUnresolvedBlocker(relations: IssueRelationSummary | null): IssueRelationIssueSummary | null {
@@ -455,6 +476,19 @@ function issueProvenance(issue: Issue, evidence: IssueFrameEvidence) {
   }
   if (hasPendingWatchdogTrigger(issue.watchdog)) return watchdogProvenance(issue.watchdog);
 
+  if (evidence.waitsOnAgents) {
+    return {
+      whyNow: "Only agents can move this blocked issue, so no human action is needed yet.",
+      factors: ["waiting on agents", "blocked by issue relation"],
+    };
+  }
+  if (isAssignedUserWork(issue)) {
+    return {
+      whyNow: "This issue is assigned to a person.",
+      factors: ["assigned to a person"],
+    };
+  }
+
   const base = issueWhyNow(issue, evidence.analysis, evidence.documentSignal);
   const blocker = primaryUnresolvedBlocker(evidence.relations);
   if (!blocker) return base;
@@ -499,7 +533,12 @@ function issueFrame(
 ): StoredFrameCandidate | null {
   const analysis = analyzeIssueIntents(issue, comment, directory);
   const documentSignal = analyzeIssueDocuments(documents, comment, analysis);
-  const evidence: IssueFrameEvidence = { analysis, documentSignal, relations };
+  const evidence: IssueFrameEvidence = {
+    analysis,
+    documentSignal,
+    relations,
+    waitsOnAgents: issue.priority !== "critical" && waitsOnlyOnAgents(issue, relations),
+  };
   const lane = issueLane(issue, comment, evidence);
   if (!lane) return null;
 
@@ -540,8 +579,8 @@ function issueFrame(
       },
       version: 1,
       mode: "status",
-      tone: issueTone(issue, lane),
-      consequence: issueConsequence(issue, lane),
+      tone: issueTone(issue, lane, evidence),
+      consequence: issueConsequence(issue, lane, evidence),
       title: issueTitle(issue),
       summary: issueSummary(issue, evidence),
       context: {
@@ -574,6 +613,8 @@ function issueFrame(
         issueStatus: issue.status,
         issuePriority: issue.priority,
         issueWorkMode: issue.workMode,
+        ...(issue.assigneeAgentId ? { issueAssigneeAgentId: issue.assigneeAgentId } : {}),
+        ...(issue.assigneeUserId ? { issueAssigneeUserId: issue.assigneeUserId } : {}),
         liveReconciled: true,
         activityPath: comment ? "activity" : undefined,
         attention: {
@@ -945,7 +986,7 @@ export async function loadReconciledCandidates(
   const aggregateIssues = openIssues.filter((issue) => (
     issue.status === "blocked" || issue.status === "in_review"
     || !!issue.blockedInboxAttention || isOpenRecoveryAction(issue.activeRecoveryAction)
-    || hasPendingWatchdogTrigger(issue.watchdog)
+    || hasPendingWatchdogTrigger(issue.watchdog) || isAssignedUserWork(issue)
   ));
   const issueCandidates = config.captureIssueLifecycle === false
     ? []

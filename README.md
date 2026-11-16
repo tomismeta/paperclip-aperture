@@ -48,6 +48,7 @@ After installation, open Paperclip and select **Focus** in the sidebar. No plugi
 - A Focus page, sidebar entry, and dashboard widget.
 - Dynamic attention lanes with issue-aware recommendations, document/dependency context, and routing that distinguishes company agents from human operators.
 - Native approval actions and inline plain confirmations with host-verified human attribution and fresh eligibility checks. Budget revisions, questions, and specialized requests hand off to native Paperclip pages.
+- Human action first: decisions you can resolve, approvals, and issues assigned to you rank above status cards. A non-critical blocked issue that only agents can move (every open blocker is assigned to an agent, or its unblock owner is an agent) stays ambient.
 - Separate cards for multiple decisions on the same issue; resolving one does not dismiss its siblings.
 - Inline issue comments, with long summaries and failure diagnostics kept under **Show context** rather than crowding the headline.
 - Durable acknowledgement and suppression backed by saved review state and ledger replay.

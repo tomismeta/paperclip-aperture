@@ -16,7 +16,7 @@ import {
   runAttentionMutation,
   trackFocusTelemetry,
 } from "./shared.js";
-import { loadDisplaySnapshot, loadWorkerApprovals } from "./data.js";
+import { loadDisplaySnapshot, loadWorkerApprovals, readViewerUserId } from "./data.js";
 
 
 function buildSeenReviewState(
@@ -205,7 +205,7 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     return { ok: true, snapshot, changed };
   });
 
-  ctx.actions.register("engage-focus", async (params) => {
+  ctx.actions.register("engage-focus", async (params, context) => {
     const companyId = requireCompanyId(params);
     const taskId = requireStringParam(params, "taskId");
     const interactionId = requireStringParam(params, "interactionId");
@@ -250,7 +250,11 @@ export function registerActionHandlers(ctx: PluginContext, store: ApertureCompan
     const { snapshot, changed } = await runAttentionMutation(ctx, store, companyId, async () => {
       const coreSnapshot = store.getSnapshot(companyId) ?? createEmptySnapshot(companyId);
       const display = await loadDisplaySnapshot(ctx, store, companyId, coreSnapshot,
-        store.getReview(companyId) ?? createEmptyReviewState(companyId));
+        store.getReview(companyId) ?? createEmptyReviewState(companyId), {
+          viewerUserId: context?.actor?.type === "user" && context.actor.userId
+            ? context.actor.userId
+            : readViewerUserId(params),
+        });
       const { displaySnapshot } = display;
       if (displaySnapshot.now?.taskId !== taskId || displaySnapshot.now.interactionId !== interactionId) {
         throw new Error("Only the current Focus NOW interaction can be engaged.");

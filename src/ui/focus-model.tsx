@@ -1,4 +1,4 @@
-import { usePluginData, usePluginStream } from "@paperclipai/plugin-sdk/ui";
+import { useHostContext, usePluginData, usePluginStream } from "@paperclipai/plugin-sdk/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AttentionDisplayPayload, AttentionReviewState, AttentionSnapshot, StoredAttentionFrame } from "../aperture/types.js";
 import type { AttentionUpdateEvent } from "../handlers/shared.js";
@@ -297,7 +297,11 @@ export function useAttentionModel(companyId: string | null | undefined): {
   syncError: string | null;
   refresh: () => void;
 } {
-  const displayQuery = usePluginData<AttentionDisplayPayload>("attention-display", companyId ? { companyId } : undefined);
+  const { userId } = useHostContext();
+  const displayQuery = usePluginData<AttentionDisplayPayload>(
+    "attention-display",
+    companyId ? { companyId, ...(userId ? { viewerUserId: userId } : {}) } : undefined,
+  );
 
   useAttentionPolling(companyId, [displayQuery.refresh]);
 
